@@ -66,6 +66,8 @@ enddef
 var tmp = ''
 
 def g:DiffCurrentFile()
+    ClearPreTmp()
+
     if line('.') == 0 || line('.') == 1
         return
     endif
@@ -83,15 +85,9 @@ def g:DiffCurrentFile()
     execute("normal! \<c-w>l")
     execute("edit " .. filename)
     execute("vertical diffsplit " .. tmp)
-
-    FocusOn(tmp)
-    augroup diffview_tmp
-        autocmd!
-        autocmd BufLeave <buffer> OnBufferLeave()
-    augroup END
 enddef
 
-def OnBufferLeave()
+def ClearPreTmp()
     if tmp == ''
         return
     endif
@@ -209,7 +205,6 @@ class DiffView
             this.Close()
         endif
     enddef
-
 endclass
 
 var diffview = DiffView.new()
