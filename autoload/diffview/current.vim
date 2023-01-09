@@ -119,12 +119,14 @@ class DiffView
         setlocal winfixwidth
         setlocal winfixheight
         setlocal noswapfile
-        setlocal buftype=nowrite
+        setlocal buftype=nofile
         setlocal bufhidden=delete
         setlocal nowrap
         setlocal foldcolumn=0
         setlocal nobuflisted
         setlocal nospell
+        setlocal nolist
+        setlocal nofoldenable
         setlocal nonumber
         setlocal norelativenumber
         setlocal nomodifiable
