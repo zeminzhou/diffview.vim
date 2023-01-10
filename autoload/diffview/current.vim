@@ -85,6 +85,7 @@ def g:DiffCurrentFile()
     execute("normal! \<c-w>l")
     execute("edit " .. filename)
     execute("vertical diffsplit " .. tmp)
+    execute("file " .. branch .. '://' .. filename)
 enddef
 
 def ClearPreTmp()
@@ -119,19 +120,17 @@ class DiffView
         setlocal winfixwidth
         setlocal winfixheight
         setlocal noswapfile
-        setlocal buftype=nofile
+        setlocal buftype=nowrite
         setlocal bufhidden=delete
         setlocal nowrap
         setlocal foldcolumn=0
         setlocal nobuflisted
         setlocal nospell
-        setlocal nolist
-        setlocal nofoldenable
         setlocal nonumber
         setlocal norelativenumber
         setlocal nomodifiable
         setfiletype diffview
-        execute('nnoremap <buffer> o :call DiffCurrentFile()')
+        execute('nnoremap <buffer> o :call DiffCurrentFile()<cr>')
     enddef
 
     def UpdateModifiedFile()
