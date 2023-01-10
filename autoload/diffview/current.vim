@@ -20,6 +20,7 @@ export def Initialize()
     augroup diffview
         autocmd!
         autocmd BufEnter * diffview.CloseIf()
+        autocmd BufWritePost * diffview.UpdateModifiedFile()
     augroup END
     diffview.Initialize()
 enddef
@@ -50,6 +51,8 @@ def DisplayFiles(message: string, bufname: string)
 
     var files = split(message)
     setlocal modifiable
+    execute("normal! gg")
+    execute("normal! dG")
 
     var size = len(files)
     append(0, bufname .. '(' .. size .. ')')
@@ -138,15 +141,8 @@ class DiffView
             return
         endif
 
-        const cmd = [
-            'git',
-            'diff',
-            '--name-only',
-        ]
-        job_start(cmd, {
-            "out_cb": (channel, message) => DisplayFiles(message, "modified"),
-            "mode": "raw"
-        })
+        var output = trim(system('git diff --name-only'))
+        DisplayFiles(output, "modified")
     enddef
 
     def UpdateStagedFile()
@@ -154,16 +150,8 @@ class DiffView
             return
         endif
 
-        const cmd = [
-            'git',
-            'diff',
-            '--cached',
-            '--name-only',
-        ]
-        job_start(cmd, {
-            "out_cb": (channel, message) => DisplayFiles(message, "staged"),
-            "mode": "raw"
-        })
+        var output = trim(system('git diff --cached --name-only'))
+        DisplayFiles(output, "staged")
     enddef
 
     def Initialize()
