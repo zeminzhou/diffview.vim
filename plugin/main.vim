@@ -22,11 +22,12 @@ def g:ToggleDiffView()
         echoerr '[diffview] requires a higher vim version'
         finish
     endif
-    if !get(b:, 'diffview_enabled', false)
-        b:diffview_enabled = true
+    if !get(g:, 'diffview_enabled', false)
+        g:diffview_enabled = true
         current.Initialize()
     else
-        b:diffview_enabled = false
+        g:diffview_enabled = false
+
         current.Deinitialize()
     endif
 enddef

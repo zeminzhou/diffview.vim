@@ -66,7 +66,7 @@ def DisplayFiles(message: string, bufname: string)
     setlocal nomodifiable
 enddef
 
-var tmp = ''
+var tmp_buf = ''
 
 def g:DiffCurrentFile()
     ClearPreTmp()
@@ -81,12 +81,15 @@ def g:DiffCurrentFile()
         '--abbrev-ref',
         'HEAD',
     ]
-    var branch = trim(system('git rev-parse --abbrev-ref HEAD'))
-    if v:shell_error != 0
-        return
+    var branch = ''
+    if bufwinnr('modified') == winnr('#')
+        branch = trim(system('git rev-parse --abbrev-ref HEAD'))
+        if v:shell_error != 0
+            return
+        endif
     endif
 
-    tmp = tempname()
+    var tmp = tempname()
     system('git show ' .. branch .. ':' .. filename .. ' > ' .. tmp)
     if v:shell_error != 0
         return
@@ -95,22 +98,28 @@ def g:DiffCurrentFile()
     execute("normal! \<c-w>l")
     execute("edit " .. filename)
     execute("vertical diffsplit " .. tmp)
-    execute("file " .. branch .. '://' .. filename)
+    tmp_buf = branch .. '://' .. filename
+    execute("file " .. tmp_buf)
 enddef
 
 def ClearPreTmp()
-    if tmp == ''
+    if tmp_buf == ''
         return
     endif
 
-    var n = bufnr(tmp)
+    if !buflisted(tmp_buf)
+        tmp_buf = ''
+        return
+    endif
+
+    var n = bufnr(tmp_buf)
     if n == -1
+        tmp_buf = ''
         return
     endif
 
     execute('bdelete ' .. n)
-    delete(tmp)
-    tmp = ''
+    tmp_buf = ''
 enddef
 
 class DiffView
