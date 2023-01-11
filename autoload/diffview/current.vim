@@ -16,7 +16,7 @@ vim9script
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 export def Initialize()
-    echom 'diffvew init'
+    echom '[diffview] init'
     augroup diffview
         autocmd!
         autocmd BufEnter * diffview.CloseIf()
@@ -26,7 +26,7 @@ export def Initialize()
 enddef
 
 export def Deinitialize()
-    echom 'diffvew close'
+    echom '[diffview] close'
     augroup diffview
         autocmd!
     augroup END
@@ -82,8 +82,15 @@ def g:DiffCurrentFile()
         'HEAD',
     ]
     var branch = trim(system('git rev-parse --abbrev-ref HEAD'))
+    if v:shell_error
+        return
+    endif
+
     tmp = tempname()
     system('git show ' .. branch .. ':' .. filename .. ' > ' .. tmp)
+    if v:shell_error
+        return
+    endif
 
     execute("normal! \<c-w>l")
     execute("edit " .. filename)
@@ -142,6 +149,9 @@ class DiffView
         endif
 
         var output = trim(system('git diff --name-only'))
+        if v:shell_error
+            return
+        endif
         DisplayFiles(output, "modified")
     enddef
 
@@ -151,6 +161,9 @@ class DiffView
         endif
 
         var output = trim(system('git diff --cached --name-only'))
+        if v:shell_error
+            return
+        endif
         DisplayFiles(output, "staged")
     enddef
 
@@ -158,6 +171,12 @@ class DiffView
         if this.initialized
             return
         endif
+        system('git rev-parse --is-inside-work-tree')
+        if v:shell_error
+            echoerr '[diffview] not a git repository'
+            return
+        endif
+
         this.Layouts()
         this.initialized = true
 
