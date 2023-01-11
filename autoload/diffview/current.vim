@@ -82,13 +82,13 @@ def g:DiffCurrentFile()
         'HEAD',
     ]
     var branch = trim(system('git rev-parse --abbrev-ref HEAD'))
-    if v:shell_error
+    if v:shell_error != 0
         return
     endif
 
     tmp = tempname()
     system('git show ' .. branch .. ':' .. filename .. ' > ' .. tmp)
-    if v:shell_error
+    if v:shell_error != 0
         return
     endif
 
@@ -149,7 +149,7 @@ class DiffView
         endif
 
         var output = trim(system('git diff --name-only'))
-        if v:shell_error
+        if v:shell_error != 0
             return
         endif
         DisplayFiles(output, "modified")
@@ -161,7 +161,7 @@ class DiffView
         endif
 
         var output = trim(system('git diff --cached --name-only'))
-        if v:shell_error
+        if v:shell_error != 0
             return
         endif
         DisplayFiles(output, "staged")
@@ -172,11 +172,10 @@ class DiffView
             return
         endif
         system('git rev-parse --is-inside-work-tree')
-        if v:shell_error
+        if v:shell_error != 0
             echoerr '[diffview] not a git repository'
             return
         endif
-
         this.Layouts()
         this.initialized = true
 
