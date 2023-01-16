@@ -149,7 +149,7 @@ class DiffView
         setlocal norelativenumber
         setlocal nomodifiable
         setfiletype diffview
-        execute('nnoremap <buffer> o :call DiffCurrentFile()<cr>')
+        execute('nnoremap <silent> <buffer> o :call DiffCurrentFile()<cr>')
     enddef
 
     def UpdateModifiedFile()
