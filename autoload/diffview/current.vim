@@ -190,6 +190,7 @@ class DiffView
 
         this.UpdateModifiedFile()
         this.UpdateStagedFile()
+        execute("normal! \<c-w>k")
     enddef
 
     def Layouts()
