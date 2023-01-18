@@ -27,7 +27,6 @@ def g:ToggleDiffView()
         current.Initialize()
     else
         g:diffview_enabled = false
-
         current.Deinitialize()
     endif
 enddef
