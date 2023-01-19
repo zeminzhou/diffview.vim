@@ -22,7 +22,17 @@ export def Initialize()
         autocmd BufEnter * diffview.CloseIf()
         autocmd BufWritePost * diffview.UpdateModifiedFile()
     augroup END
-    diffview.Initialize()
+    diffview.Initialize("current")
+enddef
+
+export def DiffBranch(branch0: string)
+    echom '[diffview] diffbranch init'
+    augroup diffbranch
+        autocmd!
+        autocmd BufEnter * diffbranch.CloseIf()
+        autocmd BufWritePost * diffbranch.UpdateModifiedFile()
+    augroup END
+    diffbranch.Initialize(branch0)
 enddef
 
 export def Deinitialize()
@@ -75,12 +85,6 @@ def g:DiffCurrentFile()
         return
     endif
     var filename = getline('.')
-    var cmd = [
-        'git',
-        'rev-parse',
-        '--abbrev-ref',
-        'HEAD',
-    ]
     var branch = ''
     if bufwinnr('modified') == winnr('#')
         branch = trim(system('git rev-parse --abbrev-ref HEAD'))
@@ -123,8 +127,8 @@ def ClearPreTmp()
 enddef
 
 class DiffView
+    this.branch: string
     this.initialized: bool
-    this.tmp: string
     this.modifid_bufname: string
     this.staged_bufname: string
 
@@ -157,7 +161,11 @@ class DiffView
             return
         endif
 
-        var output = trim(system('git diff --name-only'))
+        var branch0 = this.branch
+        if branch0 == "current"
+            branch0 = ""
+        endif
+        var output = trim(system('git diff ' .. branch0 .. ' --name-only'))
         if v:shell_error != 0
             return
         endif
@@ -176,7 +184,7 @@ class DiffView
         DisplayFiles(output, "staged")
     enddef
 
-    def Initialize()
+    def Initialize(branch0: string)
         if this.initialized
             return
         endif
@@ -185,20 +193,25 @@ class DiffView
             echoerr '[diffview] not a git repository'
             return
         endif
-        this.Layouts()
+        this.Layouts(branch0)
         this.initialized = true
+        this.branch = branch0
 
         this.UpdateModifiedFile()
-        this.UpdateStagedFile()
-        execute("normal! \<c-w>k")
+        if branch0 == "current"
+            this.UpdateStagedFile()
+            execute("normal! \<c-w>k")
+        endif
     enddef
 
-    def Layouts()
+    def Layouts(branch0: string)
         const modified_layout = 'vertical topleft:30 split ' .. this.modifid_bufname
         const staged_layout = 'horizontal rightbelow split ' .. this.staged_bufname
 
         this.Layout(modified_layout)
-        this.Layout(staged_layout)
+        if branch0 == "current"
+            this.Layout(staged_layout)
+        endif
     enddef
 
     def Close()
@@ -214,6 +227,7 @@ class DiffView
             execute("quit")
         endif
         this.initialized = false
+        this.branch = ""
     enddef
 
     def CloseIf()
@@ -225,3 +239,4 @@ class DiffView
 endclass
 
 var diffview = DiffView.new()
+var diffbranch = DiffView.new()

@@ -30,3 +30,7 @@ def g:ToggleDiffView()
         current.Deinitialize()
     endif
 enddef
+
+def g:DiffBranch(branch0: string)
+    current.DiffBranch(branch0)
+enddef
