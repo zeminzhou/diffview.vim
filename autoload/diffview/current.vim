@@ -29,7 +29,7 @@ export def DiffBranch(branch0: string)
     echom '[diffview] diffbranch init'
     augroup diffbranch
         autocmd!
-        autocmd BufEnter * diffbranch.CloseIf()
+        # autocmd BufEnter * diffbranch.CloseIf()
         autocmd BufWritePost * diffbranch.UpdateModifiedFile()
     augroup END
     diffbranch.Initialize(branch0)

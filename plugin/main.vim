@@ -34,3 +34,5 @@ enddef
 def g:DiffBranch(branch0: string)
     current.DiffBranch(branch0)
 enddef
+
+command! -nargs=1 DiffBranch :call g:DiffBranch('<args>')
