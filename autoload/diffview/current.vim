@@ -29,10 +29,17 @@ export def DiffBranch(branch0: string)
     echom '[diffview] diffbranch init'
     augroup diffbranch
         autocmd!
-        # autocmd BufEnter * diffbranch.CloseIf()
+        autocmd BufWinLeave * diffbranch.OnBufWinLeave()
         autocmd BufWritePost * diffbranch.UpdateModifiedFile()
     augroup END
     diffbranch.Initialize(branch0)
+enddef
+
+def DiffBranchEnd()
+    echom '[diffview] diffbranch close'
+    augroup diffbranch
+        autocmd!
+    augroup END
 enddef
 
 export def Deinitialize()
@@ -78,23 +85,16 @@ enddef
 
 var tmp_buf = ''
 
-def g:DiffCurrentFile()
+def g:DiffCurrentFile(branch0: string)
     ClearPreTmp()
 
     if line('.') == 0 || line('.') == 1
         return
     endif
     var filename = getline('.')
-    var branch = ''
-    if bufwinnr('modified') == winnr('#')
-        branch = trim(system('git rev-parse --abbrev-ref HEAD'))
-        if v:shell_error != 0
-            return
-        endif
-    endif
 
     var tmp = tempname()
-    system('git show ' .. branch .. ':' .. filename .. ' > ' .. tmp)
+    system('git show ' .. branch0 .. ':' .. filename .. ' > ' .. tmp)
     if v:shell_error != 0
         return
     endif
@@ -102,7 +102,7 @@ def g:DiffCurrentFile()
     execute("normal! \<c-w>l")
     execute("edit " .. filename)
     execute("vertical diffsplit " .. tmp)
-    tmp_buf = branch .. '://' .. filename
+    tmp_buf = branch0 .. '://' .. filename
     execute("file " .. tmp_buf)
 enddef
 
@@ -138,7 +138,7 @@ class DiffView
         this.staged_bufname = 'staged'
     enddef
 
-    def Layout(layout_cmd: string)
+    def Layout(layout_cmd: string, branch0: string)
         execute('silent keepalt ' .. layout_cmd)
         setlocal winfixwidth
         setlocal winfixheight
@@ -153,7 +153,7 @@ class DiffView
         setlocal norelativenumber
         setlocal nomodifiable
         setfiletype diffview
-        execute('nnoremap <silent> <buffer> o :call DiffCurrentFile()<cr>')
+        execute('nnoremap <silent> <buffer> o :call DiffCurrentFile("' .. branch0 .. '")<cr>')
     enddef
 
     def UpdateModifiedFile()
@@ -208,9 +208,17 @@ class DiffView
         const modified_layout = 'vertical topleft:30 split ' .. this.modifid_bufname
         const staged_layout = 'horizontal rightbelow split ' .. this.staged_bufname
 
-        this.Layout(modified_layout)
+        var branch1 = branch0
+        if branch1 == "current"
+            branch1 = trim(system('git rev-parse --abbrev-ref HEAD'))
+            if v:shell_error != 0
+                return
+            endif
+        endif
+
+        this.Layout(modified_layout, branch1)
         if branch0 == "current"
-            this.Layout(staged_layout)
+            this.Layout(staged_layout, '')
         endif
     enddef
 
@@ -218,6 +226,7 @@ class DiffView
         if !this.initialized
             return
         endif
+
         var winnr = FocusOn(this.modifid_bufname)
         if winnr != -1
             execute("quit")
@@ -226,6 +235,7 @@ class DiffView
         if winnr != -1
             execute("quit")
         endif
+
         this.initialized = false
         this.branch = ""
     enddef
@@ -236,7 +246,15 @@ class DiffView
             this.Close()
         endif
     enddef
+
+    def OnBufWinLeave()
+        if bufwinnr("%") == bufwinnr(this.modifid_bufname) 
+            this.Close()
+            DiffBranchEnd()
+        endif
+    enddef
 endclass
 
 var diffview = DiffView.new()
 var diffbranch = DiffView.new()
+
