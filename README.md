@@ -1,6 +1,10 @@
-## diffview.vim(WIP)
+## diffview.vim
 
-A vim9 plugin inspired by nvim's diffview.nvim
+A vim9 plugin show changed files
+
+![Alt text](/doc/_static/current.jpg?raw=true "current branch changes")
+
+![Alt text](/doc/_static/branch.jpg?raw=true "two branchs changes")
 
 ## Installation
 
@@ -20,8 +24,9 @@ call plug#end()
 
 ## Start
 
-You can use `:call ToggleDiffView()` to toggle this plugin. 
+### current branch changes
+You can use `:call ToggleDiffView()` to show current branch changes.
 
-## Appreciation
+### two branchs changes
+You can use `:DiffBranch $branch` to show two branch changes.
 
-This project is strongly inspired by [diffview.nview](https://github.com/sindrets/diffview.nvim)

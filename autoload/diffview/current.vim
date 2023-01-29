@@ -231,6 +231,7 @@ class DiffView
         if winnr != -1
             execute("quit")
         endif
+
         winnr = FocusOn(this.staged_bufname)
         if winnr != -1
             execute("quit")
