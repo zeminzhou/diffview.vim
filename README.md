@@ -24,9 +24,9 @@ call plug#end()
 
 ## Start
 
-### current branch changes
+### Current Changes
 You can use `:call ToggleDiffView()` to show current branch changes.
 
-### two branchs changes
+### Two Branchs Changes
 You can use `:DiffBranch $branch` to show two branch changes.
 
