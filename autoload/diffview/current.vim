@@ -188,11 +188,17 @@ class DiffView
         if this.initialized
             return
         endif
-        system('git rev-parse --is-inside-work-tree')
+        var root = trim(system('git rev-parse --show-toplevel'))
         if v:shell_error != 0
             echoerr '[diffview] not a git repository'
             return
         endif
+        var pwd = trim(system('pwd'))
+        if root != pwd
+            echoerr '[diffview] not in the root directory of git'
+            return
+        endif
+
         this.Layouts(branch0)
         this.initialized = true
         this.branch = branch0
