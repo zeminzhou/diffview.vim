@@ -18,9 +18,9 @@ vim9script
 import autoload 'diffview/current.vim' as current
 
 def g:ToggleDiffView()
-    if !has('patch-9.0.1151')
+    if v:version < 901
         echoerr '[diffview] requires a higher vim version'
-        finish
+        return
     endif
     if !get(g:, 'diffview_enabled', false)
         g:diffview_enabled = true
