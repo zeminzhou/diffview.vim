@@ -127,10 +127,10 @@ def ClearPreTmp()
 enddef
 
 class DiffView
-    this.branch: string
-    this.initialized: bool
-    this.modifid_bufname: string
-    this.staged_bufname: string
+    var branch: string
+    var initialized: bool
+    var modifid_bufname: string
+    var staged_bufname: string
 
     def new()
         this.initialized = false
