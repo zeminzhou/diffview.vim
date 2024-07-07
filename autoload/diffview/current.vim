@@ -20,6 +20,8 @@ export def Initialize()
     augroup diffview
         autocmd!
         autocmd BufEnter * diffview.CloseIf()
+        autocmd WinClosed * diffview.OnWinClosed()
+        autocmd BufWinEnter * diffview.OnBufWinEnter()
         autocmd BufWritePost * diffview.UpdateModifiedFile()
     augroup END
     diffview.Initialize("current")
@@ -29,6 +31,8 @@ export def DiffBranch(branch0: string)
     echom '[diffview] diffbranch init'
     augroup diffbranch
         autocmd!
+        autocmd WinClosed * diffview.OnWinClosed()
+        autocmd BufWinEnter * diffview.OnBufWinEnter()
         autocmd BufWinLeave * diffbranch.OnBufWinLeave()
         autocmd BufWritePost * diffbranch.UpdateModifiedFile()
     augroup END
@@ -86,7 +90,7 @@ enddef
 var tmp_buf = ''
 
 def g:DiffCurrentFile(branch0: string)
-    ClearPreTmp()
+    CleanUpPreTmp()
 
     if line('.') == 0 || line('.') == 1
         return
@@ -106,12 +110,12 @@ def g:DiffCurrentFile(branch0: string)
     execute("file " .. tmp_buf)
 enddef
 
-def ClearPreTmp()
+def CleanUpPreTmp()
     if tmp_buf == ''
         return
     endif
 
-    if !buflisted(tmp_buf)
+    if !bufexists(tmp_buf)
         tmp_buf = ''
         return
     endif
@@ -251,6 +255,24 @@ class DiffView
         if bufwinnr(this.modifid_bufname) == -1 || 
                 bufwinnr(this.staged_bufname) == -1
             this.Close()
+        endif
+    enddef
+
+    def OnWinClosed()
+        if tmp_buf == ''
+            return
+        endif
+        if bufwinnr(tmp_buf) == winnr()
+            CleanUpPreTmp()
+        endif
+    enddef
+
+    def OnBufWinEnter()
+        if tmp_buf == ''
+            return
+        endif
+        if bufwinnr(tmp_buf) == -1
+            CleanUpPreTmp()
         endif
     enddef
 
