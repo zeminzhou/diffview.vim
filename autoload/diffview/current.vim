@@ -31,9 +31,9 @@ export def DiffBranch(branch0: string)
     echom '[diffview] diffbranch init'
     augroup diffbranch
         autocmd!
+        autocmd BufEnter * diffview.CloseIf()
         autocmd WinClosed * diffview.OnWinClosed()
         autocmd BufWinEnter * diffview.OnBufWinEnter()
-        autocmd BufWinLeave * diffbranch.OnBufWinLeave()
         autocmd BufWritePost * diffbranch.UpdateModifiedFile()
     augroup END
     diffbranch.Initialize(branch0)
@@ -259,6 +259,10 @@ class DiffView
     enddef
 
     def OnWinClosed()
+        if bufwinnr("%") == bufwinnr(this.modifid_bufname) 
+            this.Close()
+            DiffBranchEnd()
+        endif
         if tmp_buf == ''
             return
         endif
@@ -273,13 +277,6 @@ class DiffView
         endif
         if bufwinnr(tmp_buf) == -1
             CleanUpPreTmp()
-        endif
-    enddef
-
-    def OnBufWinLeave()
-        if bufwinnr("%") == bufwinnr(this.modifid_bufname) 
-            this.Close()
-            DiffBranchEnd()
         endif
     enddef
 endclass
