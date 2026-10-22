@@ -24,8 +24,11 @@ replacement at the same pathname must keep every diff entry reachable.
 
 Use real NERDTree node classes, renderer and flag sets on a separate tree
 instance. Build its nodes from the existing comparison model, with no filesystem
-mirror or placeholder files. Keep raw paths and entry identities separately from
-escaped display text. Selection never reparses labels, prefixes or status flags.
+mirror or placeholder files. Leaf nodes carry their comparison entry as
+`node.diffview_entry` (including section, raw path, oldpath and status); directory
+nodes have no entry. The instance UI locates visible nodes through
+`ui.getLineNum(node)` and `NERDTreeFileNode.GetSelected()` returns that exact node.
+Keep raw paths and entry identities separately from escaped display text. Selection never reparses labels, prefixes or status flags.
 This covers spaces, Unicode, tabs, newlines, control bytes and literal escape
 sequences already supported by Diffview.
 
