@@ -2,6 +2,10 @@
 
 Product contract for the native Vim9 diff browser.
 
+The NERDTree integration updates the sidebar, dependency and navigation rules
+in this original contract. See [NERDTree diff navigation](nerdtree.md) for current
+requirements; the Git comparison and data-protection rules below still apply.
+
 ## Scope and existing behavior
 
 Build a native Vim9, read-only diff browser using a file panel and two diff
