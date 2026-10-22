@@ -74,30 +74,40 @@ def TreeCursor(node: dict<any>)
     'upstream selected-node API returns the exact node, not a parsed label')
 enddef
 
-def Labels(section: string, path: string)
+def Labels(entry: dict<any>)
+  var section = entry.section
   var panes = getwininfo()->filter((_, w) => w.tabnr == tabpagenr())
   sort(panes, (a, b) => a.wincol - b.wincol)
   var left = getwinvar(panes[1].winid, '&statusline')
   var right = getwinvar(panes[2].winid, '&statusline')
   for label in [left, right]
     assert_equal(0, stridx(label, section .. ' | '), 'visible section label')
-    assert_true(stridx(label, path) >= 0, 'visible selected path')
   endfor
-  if section == 'Staged'
-    assert_match(' | \%(HEAD [0-9a-f]\+\|EMPTY\) | ', left)
+  assert_true(stridx(left, strtrans(entry.oldpath)) >= 0, 'left label identifies the original path')
+  assert_true(stridx(right, strtrans(entry.path)) >= 0, 'right label identifies the destination path')
+  if entry.oldmode == '000000'
+    assert_match(' | EMPTY | ', left)
+  elseif section == 'Staged'
+    assert_match(' | HEAD [0-9a-f]\+ | ', left)
+  else
+    assert_match(' | INDEX | ', left)
+  endif
+  if entry.newmode == '000000'
+    assert_match(' | EMPTY (absent) | ', right)
+  elseif section == 'Staged'
     assert_match(' | INDEX | ', right)
   else
-    assert_match(' | ' .. (section == 'Untracked' ? 'EMPTY' : 'INDEX') .. ' | ', left)
     assert_match(' | WORKTREE (disk; unsaved edits excluded) | ', right)
   endif
 enddef
 
 def Select(section: string, path: string)
-  TreeCursor(Node(section, path))
+  var node = Node(section, path)
+  TreeCursor(node)
   feedkeys("\<CR>", 'xt')
   assert_equal(Panel(), win_getid(), 'file selection retains tree focus')
   if section != ''
-    Labels(section, strtrans(path))
+    Labels(node.diffview_entry)
   endif
 enddef
 
@@ -730,8 +740,10 @@ def Edges()
   endfor
   Select('', 'submodule')
   Unavailable('\csubmodule\|unsupported')
-  Select('', 'conflict.txt')
-  Unavailable('\cunmerged\|conflict')
+  for section in ['Staged', 'Unstaged']
+    Select(section, 'conflict.txt')
+    Unavailable('\cunmerged\|conflict')
+  endfor
   DiffviewClose
 enddef
 
@@ -1301,9 +1313,9 @@ def TreeRollback()
   assert_equal(original, ComparisonState(), 'FileType failure preserves the complete comparison state')
   for command in ['DiffviewOpen HEAD HEAD', 'DiffviewRefresh']
     var original_nodes = Nodes(tree.root)
-    var file_render = g:NERDTreeFileNode.renderToString
-    var dir_render = g:NERDTreeDirNode.renderToString
-    var instance_render = tree.root.renderToString
+    var FileRender = get(g:NERDTreeFileNode, 'renderToString')
+    var DirRender = get(g:NERDTreeDirNode, 'renderToString')
+    var InstanceRender = get(tree.root, 'renderToString')
     g:diffview_test_render_failures = 0
     try
       if command == 'DiffviewRefresh'
@@ -1325,9 +1337,9 @@ def TreeRollback()
         assert_true(original_nodes[i] is current_nodes[i], 'rollback retains original node identities')
       endfor
     finally
-      g:NERDTreeFileNode.renderToString = file_render
-      g:NERDTreeDirNode.renderToString = dir_render
-      tree.root.renderToString = instance_render
+      g:NERDTreeFileNode.renderToString = FileRender
+      g:NERDTreeDirNode.renderToString = DirRender
+      tree.root.renderToString = InstanceRender
       if command == 'DiffviewRefresh'
         writefile(['DISK nested'], 'src/deep/both.txt')
         delete('rollback-added.txt')
