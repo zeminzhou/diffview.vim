@@ -768,13 +768,31 @@ def CrossTab()
     DiffviewRefresh
     NoChanges()
     writefile(['DISK cross'], 'file.txt')
+    var refresh_origin = win_getid()
     DiffviewRefresh
+    assert_equal(refresh_origin, win_getid(), 'empty-to-changed refresh keeps the unrelated dirty tab focused')
     assert_equal(['DISK cross'], getbufline(Role('right').bufnr, 1, '$'))
     assert_equal(['HEAD cross'], getbufline(Role('left').bufnr, 1, '$'))
     assert_match('INDEX', getbufvar(Role('left').bufnr, 'diffview_source'))
     assert_match('INDEX', PaneOption('left', 'statusline'))
     assert_match('WORKTREE', getbufvar(Role('right').bufnr, 'diffview_source'))
     assert_match('WORKTREE', PaneOption('right', 'statusline'), 'cross-tab label restored with changes')
+    var panel = Role('panel')
+    var cursor_row = getcurpos(panel.winid)[1]
+    try
+      win_gotoid(panel.winid)
+      var node = Node('Unstaged', 'file.txt')
+      var row = b:NERDTree.ui.getLineNum(node)
+      assert_true(row > 0)
+      assert_equal(row, cursor_row, 'empty-to-changed refresh reveals the selected leaf, not a header')
+      assert_true(stridx(getline(row), node.displayString()) >= 0, 'refreshed selected row matches the actual rendered leaf')
+      assert_true(g:NERDTreeFileNode.GetSelected() is node)
+      # Do not reposition the cursor before Enter: that would hide the regression.
+      feedkeys("\<CR>", 'xt')
+      Pair(['HEAD cross'], ['DISK cross'])
+    finally
+      win_gotoid(refresh_origin)
+    endtry
   finally
     writefile(['DISK cross'], 'file.txt')
     DiffviewClose
