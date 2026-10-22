@@ -70,7 +70,7 @@ cmp "$manual_evidence/disk.txt" "$manual_repo/file.txt"
 
 Record actual outcomes and evidence paths outside the repository, including
 product/test/dependency SHAs and whether the git-status coexistence case ran.
-NERDTree terminal results await a frozen implementation; earlier flat-panel
+Repeat terminal checks for each delivered candidate; earlier flat-panel
 observations do not verify this UI.
 The headless `large` case separately measures a 20,000-line file and 201-file
 list, including open, select, refresh and close durations. It checks full content

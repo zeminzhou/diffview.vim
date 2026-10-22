@@ -138,6 +138,7 @@ the run. Tests restore their explicit ref/disk edits in finally blocks.
 
 Follow the [terminal smoke checklist](manual.md) to verify interactive behavior.
 Record exact product, test and dependency commits and actual results outside the
-repository. These integration tests are preparation, not a product PASS receipt.
+repository. Compilation and fixture controls alone do not establish product PASS;
+run the complete suite and terminal checklist against the exact candidate.
 Other versions/platforms/geometries and larger workloads require their own checks.
 Headless success alone does not establish interactive usability.
