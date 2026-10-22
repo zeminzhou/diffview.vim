@@ -1,21 +1,44 @@
 # Acceptance tests
 
-The suite runs 21 isolated Git/Vim scenarios and compares all fixture bytes,
+The suite retains the 21 source/safety scenarios, adds real NERDTree integration
+cases, and compares all fixture bytes,
 including indexes and object databases, before and after browsing.
 
-Run `sh tests/run.sh` from a checkout containing the complete implementation.
+Use an external NERDTree checkout. Dependencies are never downloaded or vendored
+by the runner:
+
+```sh
+deps=$(mktemp -d)
+git clone https://github.com/preservim/nerdtree.git "$deps/nerdtree"
+git -C "$deps/nerdtree" checkout 690d061b591525890f1471c6675bcb5bdc8cdff9
+git clone https://github.com/Xuyuanp/nerdtree-git-plugin.git "$deps/nerdtree-git-plugin"
+git -C "$deps/nerdtree-git-plugin" checkout e1fe727127a813095854a5b063c15e955a77eafb
+NERDTREE_RUNTIME="$deps/nerdtree" \
+NERDTREE_GIT_RUNTIME="$deps/nerdtree-git-plugin" sh tests/run.sh
+```
+
+`NERDTREE_RUNTIME` is mandatory; a missing checkout returns nonzero with setup
+instructions. `NERDTREE_GIT_RUNTIME` enables the separate real git-plugin
+coexistence case. Without it the runner explicitly reports that case NOT RUN;
+a complete NERDTree acceptance run includes both dependencies. The git-status
+plugin is a compatibility test dependency, not a Diffview runtime requirement.
+
 The runner requires Git, POSIX shell tools, and Vim 9.1 with `+vim9script`,
 `+diff`, `+windows`, `+job` and `+timers`. Override `VIM` to select a Vim executable.
 
 To test a separately checked-out revision, run:
 
 ```sh
-DIFFVIEW_TEST_RUNTIME=/absolute/path/to/candidate sh tests/run.sh
+DIFFVIEW_TEST_RUNTIME=/path/to/candidate \
+NERDTREE_RUNTIME=/path/to/nerdtree \
+NERDTREE_GIT_RUNTIME=/path/to/nerdtree-git-plugin sh tests/run.sh
 ```
 
 The runner prints the candidate SHA and any uncommitted product files. It
 creates isolated temporary Git repositories, loads the real plugin, runs public
-commands and the panel's Enter mapping, and checks actual left/right contents.
+commands and the real tree's Enter mapping, and checks actual left/right contents.
+NERDTree classes, renderer and FlagSet objects are exercised; no tree stub is
+used. Tree selection uses raw node identity rather than parsing escaped labels.
 Failures return nonzero and retain fixtures, assertion output and Vim logs at
 the printed path. Successful runs remove their temporary files. Git global and
 system configuration, hooks and signing are isolated. The Vim process receives
@@ -32,7 +55,7 @@ Core coverage:
   after changing cwd retains the original repository.
 - Read-only snapshots, real diff windows, initial panel focus, explicit refresh,
   close, repeated close, reopening through the legacy toggle.
-- Visible buffer names/filetypes, left/right order and status-line section,
+- Real NERDTree left pane, snapshot names/filetypes, left/right order and status-line section,
   selected path and HEAD/INDEX/WORKTREE/EMPTY labels; unsaved-edits notice.
 - Unsaved user buffer contents/modified state, original window, scratch-buffer
   and active-autocmd cleanup; all fixture disk/index/object bytes unchanged.
@@ -70,10 +93,16 @@ Additional scenarios:
 | edges | Empty add, deleted file, rename/mode, missing final newline, NUL binary and Git-marked binary in staged/unstaged/untracked, symlinks, gitlink and unmerged index |
 | cross_tab | Regression: absent-side labels from origin tab; empty/source clearing and restored changes from a separate dirty user tab; body, source metadata and visible labels agree |
 | read_failure | Disappearing text/forced-binary files and missing Git executable report errors while preserving the previous comparison |
-| navigation | Actual next/previous wrapping, pane Tab/Shift-Tab cycling, heading selection and buffer-local mappings |
+| navigation | Actual next/previous wrapping, pane Tab/Shift-Tab cycling, directory toggling and buffer-local mappings |
 | binary_clean | forced ASCII, NUL, empty, no-final-LF and normalized CRLF files with stale stat remain No changes on open/refresh |
 | binary_mixed | omit unchanged forced/no-final-LF/CRLF rows; retain real forced/NUL/text changes, both mode groups, pure rename, empty add/delete, and all fixture bytes |
 | large | 20,000-line content and 201 files, selection preserved on refresh; measured open/select/refresh/close timings |
+| tree_nodes | Actual nodes/renderer/flags, descendant indicators, expanded nested sections, collapse/reveal/refresh, raw control-character identities, and no Git calls for tree navigation |
+| tree_history | Deleted/absent history, comparison-relative subtree roots, both file/directory collision directions; all entries remain selectable without disk placeholders |
+| tree_isolation | Existing and mirrored user trees, custom options/maps/listeners/prototypes, cwd/registers/autocommands and dirty buffers survive open/refresh/close/manual cleanup |
+| dependency | A missing real NERDTree reports installation guidance and preserves the original layout/dirty buffer |
+| tree_rollback | Injected tree initialization/render failures preserve the old usable comparison and leave no partial resources |
+| tree_git | Optional real nerdtree-git-plugin coexistence: local status callbacks and flags remain isolated from staged/history diff flags and user trees |
 
 New fixture controls verify merge parent order, endpoint-versus-merge-base
 distinction and Git's binary attribute before plugin execution. All fixture
@@ -81,6 +110,7 @@ repositories, objects/indexes and the external symlink target are compared after
 the run. Tests restore their explicit ref/disk edits in finally blocks.
 
 Follow the [terminal smoke checklist](manual.md) to verify interactive behavior.
-The verified environment is Vim 9.1.1950 and Git 2.54.0 on macOS arm64; other
-versions/platforms/geometries and larger workloads remain unverified.
+Record exact product, test and dependency commits and actual results outside the
+repository. These integration tests are preparation, not a product PASS receipt.
+Other versions/platforms/geometries and larger workloads require their own checks.
 Headless success alone does not establish interactive usability.

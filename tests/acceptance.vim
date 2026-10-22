@@ -9,11 +9,52 @@ def Panel(): number
   assert_equal(3, len(panes), 'dedicated tab has list and two panes')
   assert_equal(['panel', 'left', 'right'],
     mapnew(panes, (_, w) => getbufvar(w.bufnr, 'diffview_role', '')), 'pane roles match visual direction')
-  for pane in panes
+  assert_equal('nerdtree', getbufvar(panes[0].bufnr, '&filetype'), 'real NERDTree left pane')
+  var tree = getbufvar(panes[0].bufnr, 'NERDTree', {})
+  assert_false(empty(tree), 'left pane owns a NERDTree instance')
+  assert_true(has_key(tree, 'root') && has_key(tree, 'ui'), 'real node and renderer objects')
+  assert_equal(g:NERDTreeFileNode.renderToString, tree.root.renderToString,
+    'upstream node renderer is retained')
+  for pane in panes[1 : 2]
     assert_equal('diffview', getbufvar(pane.bufnr, '&filetype'))
     assert_match('^diffview://\d\+/' .. getbufvar(pane.bufnr, 'diffview_role') .. '$', bufname(pane.bufnr))
   endfor
   return panes[0].winid
+enddef
+
+def Nodes(node: dict<any>): list<dict<any>>
+  var nodes = [node]
+  for child in get(node, 'children', [])
+    extend(nodes, Nodes(child))
+  endfor
+  return nodes
+enddef
+
+def Entries(): list<dict<any>>
+  var tree = getbufvar(winbufnr(Panel()), 'NERDTree')
+  return Nodes(tree.root)->filter((_, node) => !empty(get(node, 'diffview_entry', {})))
+enddef
+
+def Node(section: string, path: string): dict<any>
+  var found = Entries()->filter((_, node) => node.diffview_entry.path == path
+    && (section == '' || node.diffview_entry.section == section))
+  assert_equal(1, len(found), 'one raw entry: ' .. section .. '/' .. string(path))
+  if len(found) != 1
+    throw 'Missing or ambiguous raw tree entry: ' .. section .. '/' .. string(path)
+  endif
+  return found[0]
+enddef
+
+def TreeCursor(node: dict<any>)
+  win_gotoid(Panel())
+  var row = b:NERDTree.ui.getLineNum(node)
+  assert_true(row > 0, 'node has a visible real NERDTree row')
+  if row <= 0
+    throw 'Tree node is not visible'
+  endif
+  cursor(row, 1)
+  assert_true(g:NERDTreeFileNode.GetSelected() is node,
+    'upstream selected-node API returns the exact node, not a parsed label')
 enddef
 
 def Labels(section: string, path: string)
@@ -35,27 +76,12 @@ def Labels(section: string, path: string)
 enddef
 
 def Select(section: string, path: string)
-  win_gotoid(Panel())
-  var lines = getline(1, '$')
-  var in_section = section == ''
-  for i in range(len(lines))
-    if section != ''
-      if lines[i] =~? '^\s*' .. section .. '\>'
-        in_section = true
-      elseif lines[i] =~? '^\s*\%(staged\|unstaged\|untracked\)\>'
-        in_section = false
-      endif
-    endif
-    if in_section && stridx(lines[i], path) >= 0
-      cursor(i + 1, 1)
-      execute "normal \<CR>"
-      if section != ''
-        Labels(section, path)
-      endif
-      return
-    endif
-  endfor
-  throw 'Missing row: ' .. section .. '/' .. path .. ' in ' .. string(lines)
+  TreeCursor(Node(section, path))
+  feedkeys("\<CR>", 'xt')
+  assert_equal(Panel(), win_getid(), 'file selection retains tree focus')
+  if section != ''
+    Labels(section, strtrans(path))
+  endif
 enddef
 
 def Pair(left: list<string>, right: list<string>)
@@ -177,10 +203,11 @@ def Special()
   var rows = getbufline(winbufnr(Panel()), 1, '$')
   assert_false(join(rows, "\n") =~ "\t", 'tab in filename is escaped for display')
   assert_false(join(rows, "\n") =~ nr2char(1), 'SOH in filename is escaped for display')
-  var names = ['space 中文.txt', '-leading.txt', 'semi;', 'tab', 'line', 'ctrl', 'literal', ':(glob)**']
+  var names = ['space 中文.txt', '-leading.txt', "semi;$(touch INJECTED)|quote'\".txt",
+    "tab\tname.txt", "line\nname.txt", "ctrl\x01name.txt", 'literal\n.txt', ':(glob)**']
   for i in range(len(names))
-    assert_equal(2, len(filter(copy(rows), (_, row) => stridx(row, names[i]) >= 0)),
-      'one displayed row per section for special path ' .. names[i])
+    assert_equal(2, len(Entries()->filter((_, node) => node.diffview_entry.path == names[i])),
+      'one node per section for raw special path ' .. string(names[i]))
     Select('Staged', names[i])
     Pair(['HEAD special ' .. (i + 1)], ['INDEX special ' .. (i + 1)])
     Select('Unstaged', names[i])
@@ -781,9 +808,13 @@ def Navigation()
     feedkeys("\<Tab>", 'xt')
   endfor
   assert_equal(panel, win_getid(), 'pane navigation wraps')
-  search('^Staged$', 'w')
-  execute "normal \<CR>"
+  var section = Node('Staged', 'both.txt').parent
+  TreeCursor(section)
+  feedkeys("\<CR>", 'xt')
+  assert_false(section.isOpen, 'section Enter collapses the real directory')
   Pair(['HEAD both'], ['INDEX both'])
+  feedkeys("\<CR>", 'xt')
+  assert_true(section.isOpen, 'section Enter expands the real directory')
   normal q
   for key in [']f', '[f', 'r', 'q', '<Tab>']
     assert_equal({}, maparg(key, 'n', false, true), 'mapping is local: ' .. key)
@@ -806,8 +837,9 @@ def BinaryMixed()
   for path in ['forced.dat', 'noeol.dat', 'crlf.txt']
     assert_equal(-1, stridx(join(rows, "\n"), path), 'binary stale-stat row omitted: ' .. path)
   endfor
-  assert_equal(9, len(filter(copy(rows), (_, row) => row =~ '^  [AMDR] ')), 'nine real changes retained')
-  assert_equal(2, len(filter(copy(rows), (_, row) => stridx(row, 'mode.dat') >= 0)), 'both mode-only groups retained')
+  assert_equal(9, len(Entries()), 'nine real changes retained')
+  assert_equal(2, len(Entries()->filter((_, node) => node.diffview_entry.path == 'mode.dat')),
+    'both mode-only groups retained')
   for section in ['Staged', 'Unstaged']
     Select(section, 'real.dat')
     Unavailable('\cBinary')
@@ -856,16 +888,360 @@ def Large()
     close_seconds: reltimefloat(reltime(started))})], test_tmp .. '/large.metrics.json')
 enddef
 
+def TreeNodes()
+  execute 'cd ' .. fnameescape(test_tmp .. '/tree repo')
+  DiffviewOpen
+  var tree = getbufvar(winbufnr(Panel()), 'NERDTree')
+  for node in Nodes(tree.root)->filter((_, n) => has_key(n, 'children'))
+    assert_true(node.isOpen, 'sections and nested directories start expanded')
+  endfor
+  var staged = Node('Staged', 'src/deep/both.txt')
+  var unstaged = Node('Unstaged', 'src/deep/both.txt')
+  assert_true(staged isnot unstaged, 'same path has two independent nodes')
+  for node in [staged, unstaged, unstaged.parent, unstaged.parent.parent]
+    assert_false(empty(node.path.flagSet._flagsForScope('diffview')),
+      'file and ancestor directories carry comparison flags')
+    TreeCursor(node)
+    assert_true(stridx(getline('.'), node.path.flagSet.renderToString()) >= 0,
+      'real FlagSet indicators appear in the native rendered row')
+  endfor
+  assert_match('M', staged.path.flagSet.renderToString())
+  assert_match('M', unstaged.parent.path.flagSet.renderToString(), 'directory aggregates modified descendants')
+  var removed = Node('Unstaged', 'gone/leaf.txt')
+  assert_equal('D', removed.diffview_entry.status)
+  assert_match('D', removed.path.flagSet.renderToString())
+  assert_match('D', removed.parent.path.flagSet.renderToString(), 'deleted descendants remain indicated')
+  var renamed = Node('Staged', 'new name.txt')
+  assert_equal('R', renamed.diffview_entry.status)
+  assert_match('R', renamed.path.flagSet.renderToString())
+  var untracked = Node('Untracked', 'new deep/leaf.txt')
+  assert_equal('?', untracked.diffview_entry.status)
+  assert_true(stridx(untracked.path.flagSet.renderToString(), '?') >= 0)
+  Select('Staged', 'src/deep/both.txt')
+  Pair(['HEAD nested'], ['INDEX nested'])
+  Select('Unstaged', 'src/deep/both.txt')
+  Pair(['INDEX nested'], ['DISK nested'])
+  Select('Unstaged', 'src/same.txt')
+  Pair(['HEAD src same'], ['DISK src same'])
+  Select('Unstaged', 'other/same.txt')
+  Pair(['HEAD other same'], ['DISK other same'])
+  Select('Unstaged', '.hidden/change.txt')
+  Pair(['HEAD hidden'], ['DISK hidden'])
+  Select('Unstaged', 'gone/leaf.txt')
+  Pair(['HEAD deleted'], [''])
+  Select('Untracked', 'new deep/leaf.txt')
+  Pair([''], ['DISK nested untracked'])
+  Select('Staged', 'new name.txt')
+  Pair(['stable tree rename'], ['stable tree rename'])
+  assert_equal('old dir/old.txt', getbufvar(Role('left').bufnr, 'diffview_path'))
+
+  var names = ["tab\tname.txt", "line\nname.txt", "ctrl\x01name.txt",
+    'line^@name.txt', 'literal\n.txt', ':(glob)**']
+  for i in range(len(names))
+    for section in ['Staged', 'Unstaged']
+      Select(section, 'weird/' .. names[i])
+      assert_equal('weird/' .. names[i], getbufvar(Role('right').bufnr, 'diffview_path'))
+      Pair([(section == 'Staged' ? 'HEAD' : 'INDEX') .. ' identity ' .. (i + 1)],
+        [(section == 'Staged' ? 'INDEX' : 'DISK') .. ' identity ' .. (i + 1)])
+    endfor
+  endfor
+  Select('Unstaged', 'src/deep/both.txt')
+  var deep = Node('Unstaged', 'src/deep/both.txt').parent
+  var calls = readfile($DIFFVIEW_TEST_GIT_LOG, 'b')
+  TreeCursor(deep)
+  normal o
+  assert_false(deep.isOpen)
+  assert_equal(-1, tree.ui.getLineNum(Node('Unstaged', 'src/deep/change.txt')))
+  normal o
+  assert_true(deep.isOpen)
+  TreeCursor(Node('Unstaged', 'src/deep/both.txt'))
+  normal p
+  assert_true(g:NERDTreeFileNode.GetSelected() is deep, 'p selects the actual parent directory')
+  normal X
+  normal O
+  assert_true(deep.isOpen, 'recursive expansion is available')
+  assert_equal(calls, readfile($DIFFVIEW_TEST_GIT_LOG, 'b'), 'tree-only navigation does not run Git')
+  TreeCursor(deep)
+  normal o
+  assert_false(deep.isOpen)
+  normal ]f
+  Pair(['HEAD change'], ['DISK change'])
+  assert_true(deep.isOpen, 'next file opens its ancestors')
+  assert_true(g:NERDTreeFileNode.GetSelected() is Node('Unstaged', 'src/deep/change.txt'),
+    'next file reveals and focuses the selected node')
+  var other = Node('Unstaged', 'other/same.txt').parent
+  TreeCursor(other)
+  normal o
+  assert_false(other.isOpen)
+  DiffviewRefresh
+  assert_false(Node('Unstaged', 'other/same.txt').parent.isOpen,
+    'refresh retains surviving unrelated directory collapse')
+  assert_true(Node('Unstaged', 'src/deep/change.txt').parent.isOpen)
+  Pair(['HEAD change'], ['DISK change'])
+  for key in ['m', 'i', 's', 't', 'T', 'C', 'cd', 'CD', 'u', 'U', 'B', 'D', 'gb']
+    assert_false(get(maparg(key, 'n', false, true), 'rhs', '') =~ 'nerdtree#ui_glue#invokeKeyMap',
+      'comparison tree has no native filesystem/open/root action: ' .. key)
+  endfor
+  DiffviewClose
+enddef
+
+def TreeHistory()
+  execute 'cd ' .. fnameescape(test_tmp .. '/tree-history')
+  for command in ['DiffviewOpen nt-left nt-right', 'DiffviewCommit nt-right']
+    execute command
+    assert_equal(6, len(Entries()), 'both file/directory collision directions retain every entry')
+    Select('', 'swap')
+    Pair(['LEFT file to directory'], [''])
+    Select('', 'swap/child.txt')
+    Pair([''], ['RIGHT directory child'])
+    Select('', 'flip')
+    Pair([''], ['RIGHT directory to file'])
+    Select('', 'flip/old.txt')
+    Pair(['LEFT directory child'], [''])
+    Select('', 'deleted/deep/only.txt')
+    Pair(['LEFT historical only'], [''])
+    assert_false(isdirectory('deleted'), 'virtual historical ancestors create no disk placeholders')
+    Select('', 'sub tree/child.txt')
+    Pair(['LEFT subtree'], ['RIGHT subtree'])
+    DiffviewRefresh
+    Pair(['LEFT subtree'], ['RIGHT subtree'])
+    assert_equal(6, len(Entries()), 'refresh retains virtual and collision entries')
+    DiffviewClose
+  endfor
+  execute 'DiffviewOpen nt-left:sub\ tree nt-right:sub\ tree'
+  assert_equal(1, len(Entries()), 'subtree model has comparison-relative paths')
+  Select('', 'child.txt')
+  Pair(['LEFT subtree'], ['RIGHT subtree'])
+  assert_equal('child.txt', getbufvar(Role('right').bufnr, 'diffview_path'))
+  assert_match('nt-right:sub tree', PaneOption('right', 'statusline'))
+  DiffviewClose
+enddef
+
+def NerdGlobals(): dict<any>
+  var options: dict<any> = {}
+  for name in ['NERDTreeWinPos', 'NERDTreeWinSize', 'NERDTreeMinimalUI', 'NERDTreeShowHidden',
+      'NERDTreeShowBookmarks', 'NERDTreeShowFiles', 'NERDTreeIgnore', 'NERDTreeChDirMode', 'NERDTreeUseTCD',
+      'NERDTreeCascadeSingleChildDir', 'NERDTreeDirArrowExpandable', 'NERDTreeDirArrowCollapsible']
+    options[name] = deepcopy(get(g:, name))
+  endfor
+  return {options: options, prototypes: deepcopy([g:NERDTree, g:NERDTreeUI,
+      g:NERDTreeFileNode, g:NERDTreeDirNode, g:NERDTreePath, g:NERDTreeFlagSet]),
+    maps: deepcopy(g:NERDTreeKeyMap.All()), listeners: deepcopy(g:NERDTreePathNotifier.GetListenersMap())}
+enddef
+
+def UserTreeState(buf: number, win: number): dict<any>
+  var tree = getbufvar(buf, 'NERDTree')
+  var location = win_id2tabwin(win)
+  return {lines: getbufline(buf, 1, '$'), root: tree.root.path.str(),
+    nodes: Nodes(tree.root)->mapnew((_, node) => [node.path.str(), get(node, 'isOpen', -1),
+      node.path.flagSet.renderToString()]), cursor: getcurpos(win),
+    options: WindowOptions(win), statusline: gettabwinvar(location[0], location[1], '&statusline')}
+enddef
+
+def WaitForJobs()
+  var started = reltime()
+  while !empty(job_info()->filter((_, job) => job_status(job) == 'run'))
+      && reltimefloat(reltime(started)) < 2.0
+    sleep 10m
+  endwhile
+  sleep 10m
+  assert_equal([], job_info()->filter((_, job) => job_status(job) == 'run'), 'dependency jobs finish within 2 seconds')
+enddef
+
+def TreeIsolation()
+  execute 'cd ' .. fnameescape(test_tmp .. '/user-tree')
+  set nohidden autowriteall
+  edit open/file.txt
+  setline(1, ['UNSAVED ordinary user buffer'])
+  var userbuf = bufnr()
+  execute 'NERDTree ' .. fnameescape(test_tmp .. '/user-tree')
+  b:NERDTree.root.openRecursively()
+  g:NERDTreeRender()
+  WaitForJobs()
+  var usertree = b:NERDTree
+  var treebuf = bufnr()
+  var treewin = win_getid()
+  nnoremap <silent> <buffer> zx :let g:diffview_test_user_map = 1<CR>
+  var usermap = maparg('zx', 'n', false, true)
+  usertree.root.path.flagSet.addFlag('fixture', 'USER')
+  g:NERDTreeRender()
+  tabnew
+  NERDTreeMirror
+  assert_equal(treebuf, bufnr(), 'fixture mirrors the same ordinary NERDTree buffer')
+  var mirror = win_getid()
+  win_gotoid(treewin)
+  var original = UserTreeState(treebuf, treewin)
+  var globals = NerdGlobals()
+  var autocmds = execute('autocmd')
+  var cwd = getcwd()
+  setreg('a', ['USER named register'], 'V')
+  var registers = ['a', '0', '-', '"']->mapnew((_, reg) => getreginfo(reg))
+  var tabs = tabpagenr('$')
+
+  execute 'cd ' .. fnameescape(test_tmp .. '/tree repo')
+  var request_cwd = getcwd()
+  DiffviewOpen
+  assert_true(getbufvar(winbufnr(Panel()), 'NERDTree') isnot usertree, 'comparison owns a separate tree instance')
+  Select('Staged', 'src/deep/both.txt')
+  Pair(['HEAD nested'], ['INDEX nested'])
+  if case_name == 'tree_git'
+    var flags = Entries()->mapnew((_, node) => node.path.flagSet.renderToString())
+    var calls = getfsize($DIFFVIEW_TEST_GIT_LOG)
+    var userwin = getwininfo()->filter((_, w) => w.bufnr == userbuf)[0].winid
+    try
+      writefile(['temporary coexistence event'], test_tmp .. '/user-tree/transient-untracked.txt')
+      win_execute(userwin, 'doautocmd CursorHold')
+      win_gotoid(Panel())
+      WaitForJobs()
+      assert_true(getfsize($DIFFVIEW_TEST_GIT_LOG) > calls, 'real git-status callback executed')
+      assert_equal(flags, Entries()->mapnew((_, node) => node.path.flagSet.renderToString()),
+        'asynchronous worktree status cannot replace comparison node flags')
+      Pair(['HEAD nested'], ['INDEX nested'])
+    finally
+      delete(test_tmp .. '/user-tree/transient-untracked.txt')
+      win_execute(userwin, 'doautocmd CursorHold')
+      win_gotoid(Panel())
+      WaitForJobs()
+    endtry
+  endif
+  Reject('DiffviewOpen missing-tree-revision HEAD')
+  Pair(['HEAD nested'], ['INDEX nested'])
+  DiffviewRefresh
+  Pair(['HEAD nested'], ['INDEX nested'])
+  DiffviewClose
+  assert_equal(request_cwd, getcwd(), 'comparison never changes cwd')
+  assert_equal(tabs, tabpagenr('$'))
+  assert_true(win_id2tabwin(mirror)[0] > 0, 'mirrored user tree window survives')
+  assert_equal(original, UserTreeState(treebuf, treewin), 'ordinary tree contents/state/options survive')
+  assert_equal(globals, NerdGlobals(), 'no global prototypes/options/listeners/maps changed')
+  assert_equal(autocmds, execute('autocmd'), 'no global user/dependency autocommands changed')
+  assert_equal(registers, ['a', '0', '-', '"']->mapnew((_, reg) => getreginfo(reg)), 'user registers survive')
+  win_gotoid(treewin)
+  assert_equal(usermap, maparg('zx', 'n', false, true), 'ordinary tree buffer map remains')
+  normal zx
+  assert_equal(1, g:diffview_test_user_map)
+  assert_equal(['UNSAVED ordinary user buffer'], getbufline(userbuf, 1, '$'))
+  assert_true(getbufvar(userbuf, '&modified'))
+  assert_equal(['USER tree disk change'], readfile(test_tmp .. '/user-tree/open/file.txt'))
+
+  DiffviewOpen
+  win_execute(Role('left').winid, 'close')
+  WaitForCleanup()
+  assert_equal(original, UserTreeState(treebuf, treewin), 'manual comparison cleanup leaves user tree alone')
+  assert_equal(globals, NerdGlobals())
+  assert_equal(['UNSAVED ordinary user buffer'], getbufline(userbuf, 1, '$'))
+  execute 'cd ' .. fnameescape(cwd)
+enddef
+
+def Dependency()
+  execute 'cd ' .. fnameescape(test_tmp .. '/tree repo')
+  assert_equal(0, exists(':NERDTree'), 'fixture truly omits NERDTree')
+  edit src/deep/both.txt
+  setline(1, ['UNSAVED missing-dependency buffer'])
+  var userbuf = bufnr()
+  var buffers = getbufinfo()->mapnew((_, b) => b.bufnr)
+  var windows = gettabinfo()
+  Reject('DiffviewOpen')
+  assert_match('\cNERDTree', execute('messages') .. v:errmsg, 'missing dependency names the installation requirement')
+  assert_equal(buffers, getbufinfo()->mapnew((_, b) => b.bufnr))
+  assert_equal(windows, gettabinfo(), 'dependency failure preserves original layout')
+  assert_true(&modified)
+  assert_equal(['UNSAVED missing-dependency buffer'], getbufline(userbuf, 1, '$'))
+  &runtimepath = $NERDTREE_RUNTIME .. ',' .. &runtimepath
+  runtime plugin/NERD_tree.vim
+  DiffviewOpen
+  Select('Unstaged', 'src/deep/both.txt')
+  Pair(['INDEX nested'], ['DISK nested'])
+  DiffviewClose
+  assert_true(getbufvar(userbuf, '&modified'), 'install/retry keeps the original dirty buffer')
+enddef
+
+def RenderFailure()
+  throw 'fixture NERDTree renderer failure'
+enddef
+
+def TreeRollback()
+  execute 'cd ' .. fnameescape(test_tmp .. '/tree repo')
+  set nohidden autowriteall
+  edit src/deep/both.txt
+  setline(1, ['UNSAVED tree rollback buffer'])
+  var userbuf = bufnr()
+  DiffviewOpen
+  Select('Unstaged', 'src/deep/both.txt')
+  var buffers = PluginBuffers()
+  var tree = getbufvar(Role('panel').bufnr, 'NERDTree')
+  var tabs = tabpagenr('$')
+  augroup DiffviewTestTreeFailure
+    autocmd FileType nerdtree throw 'fixture NERDTree FileType failure'
+  augroup END
+  try
+    Reject('DiffviewOpen')
+  finally
+    augroup DiffviewTestTreeFailure
+      autocmd!
+    augroup END
+  endtry
+  assert_equal(buffers, PluginBuffers(), 'tree FileType failure retains old buffers')
+  assert_equal(tabs, tabpagenr('$'))
+  Pair(['INDEX nested'], ['DISK nested'])
+  var original_render = g:NERDTreeUI.render
+  var original_instance_render = tree.ui.render
+  try
+    g:NERDTreeUI.render = function('s:RenderFailure')
+    tree.ui.render = function('s:RenderFailure')
+    Reject('DiffviewOpen')
+    assert_equal(buffers, PluginBuffers(), 'renderer failure retains old comparison buffers')
+    assert_equal(tabs, tabpagenr('$'))
+    Pair(['INDEX nested'], ['DISK nested'])
+    Reject('DiffviewRefresh')
+    assert_equal(buffers, PluginBuffers(), 'refresh renderer failure is transactional')
+    Pair(['INDEX nested'], ['DISK nested'])
+  finally
+    g:NERDTreeUI.render = original_render
+    tree.ui.render = original_instance_render
+  endtry
+  Select('Unstaged', 'src/deep/change.txt')
+  Pair(['HEAD change'], ['DISK change'])
+  DiffviewRefresh
+  Pair(['HEAD change'], ['DISK change'])
+  DiffviewClose
+  WaitForCleanup()
+  assert_equal(['UNSAVED tree rollback buffer'], getbufline(userbuf, 1, '$'))
+  assert_true(getbufvar(userbuf, '&modified'), 'tree errors never save or discard original edits')
+enddef
+
 try
   assert_true(has('vim9script'))
   assert_true(has('diff'))
   assert_true(has('windows'))
   assert_true(has('job'))
   assert_true(has('timers'))
-  execute 'set runtimepath^=' .. fnameescape($DIFFVIEW_TEST_RUNTIME)
+  &runtimepath = $DIFFVIEW_TEST_RUNTIME .. ',' .. $VIMRUNTIME
+  g:NERDTreeBookmarksFile = test_tmp .. '/bookmarks'
+  g:NERDTreeHijackNetrw = 0
+  if case_name != 'dependency'
+    &runtimepath = $NERDTREE_RUNTIME .. ',' .. &runtimepath
+    if case_name == 'tree_isolation' || case_name == 'tree_git'
+      g:NERDTreeWinPos = 'right'
+      g:NERDTreeWinSize = 27
+      g:NERDTreeMinimalUI = 1
+      g:NERDTreeShowHidden = 1
+      g:NERDTreeShowBookmarks = 1
+      g:NERDTreeShowFiles = 0
+      g:NERDTreeIgnore = ['\.txt$']
+      g:NERDTreeChDirMode = 2
+      g:NERDTreeDirArrowExpandable = '++'
+      g:NERDTreeDirArrowCollapsible = 'vv'
+    endif
+    if case_name == 'tree_git'
+      &runtimepath = $NERDTREE_GIT_RUNTIME .. ',' .. &runtimepath
+    endif
+    runtime plugin/NERD_tree.vim
+    assert_equal(2, exists(':NERDTree'), 'real NERDTree commands are loaded')
+  endif
   runtime plugin/main.vim
   if exists(':DiffviewOpen') != 2
-    throw 'DiffviewOpen command unavailable: runtime is not a C01 candidate'
+    throw 'DiffviewOpen command unavailable in the candidate runtime'
   endif
   defcompile
   if case_name == 'local'
@@ -910,6 +1286,16 @@ try
     BinaryMixed()
   elseif case_name == 'large'
     Large()
+  elseif case_name == 'tree_nodes'
+    TreeNodes()
+  elseif case_name == 'tree_history'
+    TreeHistory()
+  elseif case_name == 'tree_isolation' || case_name == 'tree_git'
+    TreeIsolation()
+  elseif case_name == 'dependency'
+    Dependency()
+  elseif case_name == 'tree_rollback'
+    TreeRollback()
   else
     throw 'Unknown test case: ' .. case_name
   endif

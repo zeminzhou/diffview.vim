@@ -3,6 +3,14 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runtime=${DIFFVIEW_TEST_RUNTIME:-$root}
+if [ -z "${NERDTREE_RUNTIME:-}" ] || [ ! -f "$NERDTREE_RUNTIME/plugin/NERD_tree.vim" ]; then
+    printf 'NERDTree is required: set NERDTREE_RUNTIME to its external checkout (see tests/README.md).\n' >&2
+    exit 1
+fi
+if [ -n "${NERDTREE_GIT_RUNTIME:-}" ] && [ ! -f "$NERDTREE_GIT_RUNTIME/nerdtree_plugin/git_status.vim" ]; then
+    printf 'Invalid NERDTREE_GIT_RUNTIME: expected an external nerdtree-git-plugin checkout.\n' >&2
+    exit 1
+fi
 test_tmp=$(mktemp -d "${TMPDIR:-/tmp}/diffview-tests.XXXXXX")
 finish() {
     result=$?
@@ -23,7 +31,7 @@ export GIT_ATTR_NOSYSTEM=1
 export GIT_AUTHOR_NAME=Tester GIT_AUTHOR_EMAIL=tester@example.invalid
 export GIT_COMMITTER_NAME=Tester GIT_COMMITTER_EMAIL=tester@example.invalid
 export GIT_TERMINAL_PROMPT=0
-export DIFFVIEW_TEST_TMP="$test_tmp" DIFFVIEW_TEST_RUNTIME="$runtime"
+export DIFFVIEW_TEST_TMP="$test_tmp" DIFFVIEW_TEST_RUNTIME="$runtime" NERDTREE_RUNTIME
 
 new_repo() {
     mkdir -p "$1"
@@ -124,6 +132,7 @@ printf 'OUTSIDE fixture marker\n' > "$test_tmp/outside/file.txt"
 printf 'OUTSIDE fixture marker\n' > "$test_tmp/outside/forced.dat"
 
 . "$root/tests/fixtures-c02.sh"
+. "$root/tests/fixtures-nerdtree.sh"
 
 # Compare all fixture bytes, including indexes/objects, after Vim exits.
 cp -R "$test_tmp/local repo 中文" "$test_tmp/local-before"
@@ -143,15 +152,40 @@ git -C "$runtime" rev-parse HEAD
 git -C "$runtime" status --short -- plugin autoload
 "${VIM:-vim}" --version | sed -n '1,4p'
 git --version
+printf 'NERDTree: '
+git -C "$NERDTREE_RUNTIME" rev-parse HEAD
+git -C "$NERDTREE_RUNTIME" status --short -- plugin autoload lib nerdtree_plugin syntax
+if [ -n "${NERDTREE_GIT_RUNTIME:-}" ]; then
+    export NERDTREE_GIT_RUNTIME
+    printf 'nerdtree-git-plugin: '
+    git -C "$NERDTREE_GIT_RUNTIME" rev-parse HEAD
+fi
 printf 'Stale-stat index before: '
 cksum "$test_tmp/clean/.git/index"
 
 # Do not lend the product our fixture-construction safety settings.
 unset GIT_OPTIONAL_LOCKS
+export DIFFVIEW_TEST_REAL_GIT="$(command -v git)"
+export DIFFVIEW_TEST_GIT_LOG="$test_tmp/product-git.argv"
+mkdir "$test_tmp/git-bin"
+cat > "$test_tmp/git-bin/git" <<'EOF'
+#!/bin/sh
+printf '%s\000' "$@" >> "$DIFFVIEW_TEST_GIT_LOG"
+printf '\n' >> "$DIFFVIEW_TEST_GIT_LOG"
+exec "$DIFFVIEW_TEST_REAL_GIT" "$@"
+EOF
+chmod +x "$test_tmp/git-bin/git"
+export PATH="$test_tmp/git-bin:$PATH"
 suite_failed=0
-for test_case in local clean unborn nonrepo special refresh lifecycle ownership ancestor \
-    trees commits historical_refresh errors exclusions edges cross_tab read_failure navigation \
-    binary_clean binary_mixed large; do
+test_cases='local clean unborn nonrepo special refresh lifecycle ownership ancestor
+    trees commits historical_refresh errors exclusions edges cross_tab read_failure navigation
+    binary_clean binary_mixed large tree_nodes tree_history tree_isolation dependency tree_rollback'
+if [ -n "${NERDTREE_GIT_RUNTIME:-}" ]; then
+    test_cases="$test_cases tree_git"
+else
+    printf 'NOT RUN: tree_git (set NERDTREE_GIT_RUNTIME for the full coexistence check)\n'
+fi
+for test_case in $test_cases; do
     export DIFFVIEW_TEST_CASE="$test_case"
     if "${VIM:-vim}" -Nu NONE -U NONE -i NONE -n -es \
         -V1"$test_tmp/$test_case.vim.log" -S "$root/tests/acceptance.vim" \
@@ -174,7 +208,8 @@ diff -r "$test_tmp/lifecycle-before" "$test_tmp/lifecycle"
 diff -r "$test_tmp/ancestor-before" "$test_tmp/ancestor"
 diff -r "$test_tmp/outside-before" "$test_tmp/outside"
 diff -r "$test_tmp/refresh-expected" "$test_tmp/refresh"
-for fixture in 'history repo 中文' edges cross-tab read-failure bare.git shallow large binary-clean binary-mixed; do
+for fixture in 'history repo 中文' edges cross-tab read-failure bare.git shallow large binary-clean binary-mixed \
+    'tree repo' tree-history user-tree; do
     diff -r "$test_tmp/$fixture-before" "$test_tmp/$fixture"
 done
 printf 'Stale-stat index after: '
