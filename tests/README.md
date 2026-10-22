@@ -109,6 +109,10 @@ Raw-identity fixtures include newline and BEL filenames alongside their literal
 `^@`/`^G` display twins. Selection must distinguish them before and after tree
 operations, including NERDTree's own control-byte delimiter. Historical ghosts
 and the same staged/unstaged path are explicitly selected again after refresh.
+The public `NERDTreeRender()` entry must retain the comparison headers and raw
+registers. A unique leaf's reported row must contain its actual display string;
+Enter at that row must still show the exact expected comparison. Matching two
+internal lookup methods alone cannot establish that screen rows are correct.
 Register snapshots read the raw `=` expression without evaluating it and include
 the complete `getreginfo()` for the unnamed, numbered, named, small-delete and
 search registers, including unnamed-register identity. Open, Toggle in both

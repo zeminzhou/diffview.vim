@@ -980,6 +980,22 @@ def TreeNodes()
   Pair(['stable tree rename'], ['stable tree rename'])
   assert_equal('old dir/old.txt', getbufvar(Role('left').bufnr, 'diffview_path'))
 
+  Select('Staged', 'src/sibling.txt')
+  Pair(['HEAD sibling'], ['INDEX sibling'])
+  var native_node = Node('Staged', 'src/sibling.txt')
+  var headers = getline(1, 2)
+  assert_equal(['[diffview] LOCAL', 'Disk snapshots; unsaved edits excluded'], headers)
+  g:NERDTreeRender()
+  assert_equal(headers, getline(1, 2), 'public native rerender preserves comparison headers')
+  assert_equal(registers, RegisterState(), 'public native rerender preserves the raw expression register')
+  var native_row = tree.ui.getLineNum(native_node)
+  assert_true(native_row > 0)
+  assert_true(stridx(getline(native_row), native_node.displayString()) >= 0,
+    'native row identity agrees with actual screen text, independently of GetSelected')
+  TreeCursor(native_node)
+  feedkeys("\<CR>", 'xt')
+  Pair(['HEAD sibling'], ['INDEX sibling'])
+
   var names = ["tab\tname.txt", "line\nname.txt", "ctrl\x01name.txt",
     'line^@name.txt', 'literal\n.txt', ':(glob)**', "bell\x07name.txt", 'bell^Gname.txt']
   assert_equal(strtrans(names[1]), strtrans(names[3]), 'fixture includes colliding newline display text')
