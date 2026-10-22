@@ -98,17 +98,22 @@ Additional scenarios:
 | binary_mixed | omit unchanged forced/no-final-LF/CRLF rows; retain real forced/NUL/text changes, both mode groups, pure rename, empty add/delete, and all fixture bytes |
 | large | 20,000-line content and 201 files, selection preserved on refresh; measured open/select/refresh/close timings |
 | empty_start | A fresh Vim with one empty unnamed buffer and no alternate buffer directly opens/refreshes/closes the real tree; no preparatory edit may hide an upstream Creator E194 |
-| tree_nodes | Actual nodes/renderer/flags, descendant indicators, expanded nested sections, collapse/reveal/refresh, raw control-character identities, and no Git calls for tree navigation |
+| tree_nodes | Actual nodes/renderer/flags, descendant indicators, expanded nested sections, collapse/reveal/refresh, raw control-character identities, no Git calls for tree navigation, and expression/search/anonymous/numeric/named register preservation |
 | tree_history | Deleted/absent history, comparison-relative subtree roots, both file/directory collision directions; all entries remain selectable without disk placeholders |
 | tree_isolation | Existing and mirrored user trees, custom options/maps/listeners/prototypes, cwd/registers/autocommands and dirty buffers survive open/refresh/close/manual cleanup |
 | dependency | A missing real NERDTree reports installation guidance and preserves the original layout/dirty buffer |
-| tree_rollback | Injected tree initialization/render failures preserve the old usable comparison and leave no partial resources |
+| tree_rollback | FileType failure plus native mid-render throws during new Open and changed-model Refresh preserve tree/node/row identities, bodies/sources, readonly/options, focus, registers, buffers/windows/timers/autocommands and the original dirty buffer |
 | tree_git | Optional real nerdtree-git-plugin coexistence: local status callbacks and flags remain isolated from staged/history diff flags and user trees |
 
 Raw-identity fixtures include newline and BEL filenames alongside their literal
 `^@`/`^G` display twins. Selection must distinguish them before and after tree
 operations, including NERDTree's own control-byte delimiter. Historical ghosts
 and the same staged/unstaged path are explicitly selected again after refresh.
+Register snapshots read the raw `=` expression without evaluating it and include
+types for the unnamed, numbered, named, small-delete and search registers. Render
+faults are injected into `root.renderToString`, after native UI.render has begun
+clearing/unlocking its buffer. The refresh test declares and restores its temporary
+content/addition edits; whole-fixture comparisons still require original bytes.
 
 New fixture controls verify merge parent order, endpoint-versus-merge-base
 distinction and Git's binary attribute before plugin execution. All fixture

@@ -52,6 +52,7 @@ vim -Nu NONE -U NONE -i NONE -n \
 | j/k over sections/directories/files, Enter and o | Directories toggle; files retain tree focus; staged HEAD→INDEX differs from unstaged INDEX→disk; unsaved text absent; node flags and descendant indicators are visible |
 | Collapse a directory, then ]f/[f; Tab/Shift-Tab | Next/previous reveal nodes by expanding ancestors; wrapping and pane focus work; left/right direction stays correct |
 | Expand one directory and collapse another, then r | Selection and surviving expansion state remain; flags and selected content update together |
+| Set an expression register and a search pattern before open/fold/refresh/close, inspect their raw values afterwards | `=`, search, unnamed, numbered and named register contents/types remain; inspecting `=` does not evaluate it |
 | In staged diff panes use ]c/[c | Native hunk navigation moves between line 3 and line 25 changes |
 | r, q, reopen, then manually close a content pane/tab | Refresh/close usable; no orphan scratch panes; origin and unsaved contents survive |
 | DiffviewOpen HEAD HEAD, then DiffviewCommit HEAD | Empty comparison stays usable; root commit uses EMPTY on left, HEAD/object identity on right |

@@ -2,6 +2,23 @@ vim9script
 
 const test_tmp = $DIFFVIEW_TEST_TMP
 const case_name = $DIFFVIEW_TEST_CASE
+const user_registers = ['"', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', '-', '/', '=']
+
+def RegisterState(): dict<any>
+  var registers: dict<any> = {}
+  for name in user_registers
+    # Read the expression itself; evaluating = could hide a changed expression.
+    registers[name] = [getreg(name, 1, true), getregtype(name)]
+  endfor
+  return registers
+enddef
+
+def SeedRegisters()
+  for name in user_registers
+    setreg(name, ['USER register ' .. name], name == 'a' ? 'V' : 'v')
+  endfor
+  setreg('=', '6 * 7')
+enddef
 
 def Panel(): number
   var panes = getwininfo()->filter((_, w) => w.tabnr == tabpagenr())
@@ -915,7 +932,10 @@ enddef
 
 def TreeNodes()
   execute 'cd ' .. fnameescape(test_tmp .. '/tree repo')
+  SeedRegisters()
+  var registers = RegisterState()
   DiffviewOpen
+  assert_equal(registers, RegisterState(), 'successful native render preserves expression/search/yank registers')
   var tree = getbufvar(winbufnr(Panel()), 'NERDTree')
   for node in Nodes(tree.root)->filter((_, n) => has_key(n, 'children'))
     assert_true(node.isOpen, 'sections and nested directories start expanded')
@@ -988,6 +1008,7 @@ def TreeNodes()
   normal O
   assert_true(deep.isOpen, 'recursive expansion is available')
   assert_equal(calls, readfile($DIFFVIEW_TEST_GIT_LOG, 'b'), 'tree-only navigation does not run Git')
+  assert_equal(registers, RegisterState(), 'folding and native re-render preserve user registers')
   TreeCursor(deep)
   normal o
   assert_false(deep.isOpen)
@@ -1001,6 +1022,7 @@ def TreeNodes()
   normal o
   assert_false(other.isOpen)
   DiffviewRefresh
+  assert_equal(registers, RegisterState(), 'refresh render preserves user registers')
   assert_false(Node('Unstaged', 'other/same.txt').parent.isOpen,
     'refresh retains surviving unrelated directory collapse')
   assert_true(Node('Unstaged', 'src/deep/change.txt').parent.isOpen)
@@ -1014,6 +1036,7 @@ def TreeNodes()
       'comparison tree has no native filesystem/open/root action: ' .. key)
   endfor
   DiffviewClose
+  assert_equal(registers, RegisterState(), 'closing preserves user registers')
 enddef
 
 def TreeHistory()
@@ -1107,8 +1130,8 @@ def TreeIsolation()
   var globals = NerdGlobals()
   var autocmds = execute('autocmd')
   var cwd = getcwd()
-  setreg('a', ['USER named register'], 'V')
-  var registers = ['a', '0', '-', '"']->mapnew((_, reg) => getreginfo(reg))
+  SeedRegisters()
+  var registers = RegisterState()
   var tabs = tabpagenr('$')
 
   execute 'cd ' .. fnameescape(test_tmp .. '/tree repo')
@@ -1148,7 +1171,7 @@ def TreeIsolation()
   assert_equal(original, UserTreeState(treebuf, treewin), 'ordinary tree contents/state/options survive')
   assert_equal(globals, NerdGlobals(), 'no global prototypes/options/listeners/maps changed')
   assert_equal(autocmds, execute('autocmd'), 'no global user/dependency autocommands changed')
-  assert_equal(registers, ['a', '0', '-', '"']->mapnew((_, reg) => getreginfo(reg)), 'user registers survive')
+  assert_equal(registers, RegisterState(), 'expression/search/anonymous/numeric/named registers survive')
   win_gotoid(treewin)
   assert_equal(usermap, maparg('zx', 'n', false, true), 'ordinary tree buffer map remains')
   normal zx
@@ -1190,7 +1213,33 @@ def Dependency()
 enddef
 
 def RenderFailure()
+  g:diffview_test_render_failures += 1
   throw 'fixture NERDTree renderer failure'
+enddef
+
+def ComparisonState(): dict<any>
+  var focus = win_getid()
+  var panel = Role('panel')
+  var tree = getbufvar(panel.bufnr, 'NERDTree')
+  win_gotoid(panel.winid)
+  var selected = g:NERDTreeFileNode.GetSelected()
+  var nodes = Nodes(tree.root)->mapnew((_, node) => [deepcopy(get(node, 'diffview_entry', {})),
+    get(node, 'isOpen', -1), tree.ui.getLineNum(node), node.path.flagSet.renderToString()])
+  var cursor = getcurpos()
+  win_gotoid(focus)
+  var panes = [panel, Role('left'), Role('right')]
+  return {focus: focus, cursor: cursor, selected: deepcopy(get(selected, 'diffview_entry', {})),
+    rows: getbufline(panel.bufnr, 1, '$'), nodes: nodes,
+    resources: [getbufinfo()->mapnew((_, b) => b.bufnr),
+      getwininfo()->mapnew((_, w) => [w.winid, w.bufnr, w.tabnr]), tabpagenr('$')],
+    timers: timer_info()->mapnew((_, timer) => timer.id), autocmds: execute('autocmd'),
+    bodies: panes->mapnew((_, w) => getbufline(w.bufnr, 1, '$')),
+    readonly: panes->mapnew((_, w) => [getbufvar(w.bufnr, '&readonly'), getbufvar(w.bufnr, '&modifiable')]),
+    options: panes->mapnew((_, w) => WindowOptions(w.winid)),
+    sources: panes[1 : 2]->mapnew((_, w) => [getbufvar(w.bufnr, 'diffview_section'),
+      getbufvar(w.bufnr, 'diffview_path'), getbufvar(w.bufnr, 'diffview_source')]),
+    labels: [PaneOption('left', 'statusline'), PaneOption('right', 'statusline')],
+    registers: RegisterState()}
 enddef
 
 def TreeRollback()
@@ -1199,11 +1248,17 @@ def TreeRollback()
   edit src/deep/both.txt
   setline(1, ['UNSAVED tree rollback buffer'])
   var userbuf = bufnr()
+  SeedRegisters()
+  var registers = RegisterState()
   DiffviewOpen
+  assert_equal(registers, RegisterState(), 'initial render preserves registers')
   Select('Unstaged', 'src/deep/both.txt')
   var buffers = PluginBuffers()
   var tree = getbufvar(Role('panel').bufnr, 'NERDTree')
   var tabs = tabpagenr('$')
+  var globals = NerdGlobals()
+  win_gotoid(Role('left').winid)
+  var original = ComparisonState()
   augroup DiffviewTestTreeFailure
     autocmd FileType nerdtree throw 'fixture NERDTree FileType failure'
   augroup END
@@ -1217,22 +1272,43 @@ def TreeRollback()
   assert_equal(buffers, PluginBuffers(), 'tree FileType failure retains old buffers')
   assert_equal(tabs, tabpagenr('$'))
   Pair(['INDEX nested'], ['DISK nested'])
-  var original_render = g:NERDTreeUI.render
-  var original_instance_render = tree.ui.render
-  try
-    g:NERDTreeUI.render = function('s:RenderFailure')
-    tree.ui.render = function('s:RenderFailure')
-    Reject('DiffviewOpen')
-    assert_equal(buffers, PluginBuffers(), 'renderer failure retains old comparison buffers')
-    assert_equal(tabs, tabpagenr('$'))
-    Pair(['INDEX nested'], ['DISK nested'])
-    Reject('DiffviewRefresh')
-    assert_equal(buffers, PluginBuffers(), 'refresh renderer failure is transactional')
-    Pair(['INDEX nested'], ['DISK nested'])
-  finally
-    g:NERDTreeUI.render = original_render
-    tree.ui.render = original_instance_render
-  endtry
+  assert_equal(original, ComparisonState(), 'FileType failure preserves the complete comparison state')
+  for command in ['DiffviewOpen HEAD HEAD', 'DiffviewRefresh']
+    var original_nodes = Nodes(tree.root)
+    var file_render = g:NERDTreeFileNode.renderToString
+    var dir_render = g:NERDTreeDirNode.renderToString
+    var instance_render = tree.root.renderToString
+    g:diffview_test_render_failures = 0
+    try
+      if command == 'DiffviewRefresh'
+        writefile(['DISK changed during failed refresh'], 'src/deep/both.txt')
+        writefile(['NEW during failed refresh'], 'rollback-added.txt')
+      endif
+      # Throw inside native UI.render, after it has cleared/unlocked its buffer.
+      g:NERDTreeFileNode.renderToString = RenderFailure
+      g:NERDTreeDirNode.renderToString = RenderFailure
+      tree.root.renderToString = RenderFailure
+      Reject(command)
+      assert_true(g:diffview_test_render_failures > 0, 'fixture reached the native mid-render failure: ' .. command)
+      assert_equal(original, ComparisonState(), 'mid-render failure preserves full state: ' .. command)
+      var current = getbufvar(Role('panel').bufnr, 'NERDTree')
+      assert_true(current is tree, 'rollback retains the original tree instance')
+      var current_nodes = Nodes(current.root)
+      assert_equal(len(original_nodes), len(current_nodes))
+      for i in range(min([len(original_nodes), len(current_nodes)]))
+        assert_true(original_nodes[i] is current_nodes[i], 'rollback retains original node identities')
+      endfor
+    finally
+      g:NERDTreeFileNode.renderToString = file_render
+      g:NERDTreeDirNode.renderToString = dir_render
+      tree.root.renderToString = instance_render
+      if command == 'DiffviewRefresh'
+        writefile(['DISK nested'], 'src/deep/both.txt')
+        delete('rollback-added.txt')
+      endif
+    endtry
+    assert_equal(globals, NerdGlobals(), 'failed rendering does not change global NERDTree APIs/options/maps/listeners')
+  endfor
   Select('Unstaged', 'src/deep/change.txt')
   Pair(['HEAD change'], ['DISK change'])
   DiffviewRefresh
