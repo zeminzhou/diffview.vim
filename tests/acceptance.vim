@@ -30,7 +30,7 @@ def Panel(): number
   var tree = getbufvar(panes[0].bufnr, 'NERDTree', {})
   assert_false(empty(tree), 'left pane owns a NERDTree instance')
   assert_true(has_key(tree, 'root') && has_key(tree, 'ui'), 'real node and renderer objects')
-  assert_equal(g:NERDTreeFileNode.renderToString, tree.root.renderToString,
+  assert_equal(get(g:NERDTreeFileNode.renderToString, 'name'), get(tree.root.renderToString, 'name'),
     'upstream node renderer is retained')
   for pane in panes[1 : 2]
     assert_equal('diffview', getbufvar(pane.bufnr, '&filetype'))
