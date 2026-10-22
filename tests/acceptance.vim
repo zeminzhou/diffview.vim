@@ -1,0 +1,925 @@
+vim9script
+
+const test_tmp = $DIFFVIEW_TEST_TMP
+const case_name = $DIFFVIEW_TEST_CASE
+
+def Panel(): number
+  var panes = getwininfo()->filter((_, w) => w.tabnr == tabpagenr())
+  sort(panes, (a, b) => a.wincol - b.wincol)
+  assert_equal(3, len(panes), 'dedicated tab has list and two panes')
+  assert_equal(['panel', 'left', 'right'],
+    mapnew(panes, (_, w) => getbufvar(w.bufnr, 'diffview_role', '')), 'pane roles match visual direction')
+  for pane in panes
+    assert_equal('diffview', getbufvar(pane.bufnr, '&filetype'))
+    assert_match('^diffview://\d\+/' .. getbufvar(pane.bufnr, 'diffview_role') .. '$', bufname(pane.bufnr))
+  endfor
+  return panes[0].winid
+enddef
+
+def Labels(section: string, path: string)
+  var panes = getwininfo()->filter((_, w) => w.tabnr == tabpagenr())
+  sort(panes, (a, b) => a.wincol - b.wincol)
+  var left = getwinvar(panes[1].winid, '&statusline')
+  var right = getwinvar(panes[2].winid, '&statusline')
+  for label in [left, right]
+    assert_equal(0, stridx(label, section .. ' | '), 'visible section label')
+    assert_true(stridx(label, path) >= 0, 'visible selected path')
+  endfor
+  if section == 'Staged'
+    assert_match(' | \%(HEAD [0-9a-f]\+\|EMPTY\) | ', left)
+    assert_match(' | INDEX | ', right)
+  else
+    assert_match(' | ' .. (section == 'Untracked' ? 'EMPTY' : 'INDEX') .. ' | ', left)
+    assert_match(' | WORKTREE (disk; unsaved edits excluded) | ', right)
+  endif
+enddef
+
+def Select(section: string, path: string)
+  win_gotoid(Panel())
+  var lines = getline(1, '$')
+  var in_section = section == ''
+  for i in range(len(lines))
+    if section != ''
+      if lines[i] =~? '^\s*' .. section .. '\>'
+        in_section = true
+      elseif lines[i] =~? '^\s*\%(staged\|unstaged\|untracked\)\>'
+        in_section = false
+      endif
+    endif
+    if in_section && stridx(lines[i], path) >= 0
+      cursor(i + 1, 1)
+      execute "normal \<CR>"
+      if section != ''
+        Labels(section, path)
+      endif
+      return
+    endif
+  endfor
+  throw 'Missing row: ' .. section .. '/' .. path .. ' in ' .. string(lines)
+enddef
+
+def Pair(left: list<string>, right: list<string>)
+  var panes = getwininfo()->filter((_, w) => w.tabnr == tabpagenr())
+  sort(panes, (a, b) => a.wincol - b.wincol)
+  assert_equal(3, len(panes))
+  assert_equal(left, getbufline(panes[1].bufnr, 1, '$'), 'left content')
+  assert_equal(right, getbufline(panes[2].bufnr, 1, '$'), 'right content')
+  for pane in panes[1 : 2]
+    assert_true(getbufvar(pane.bufnr, '&readonly'), 'snapshot is readonly')
+    assert_false(getbufvar(pane.bufnr, '&modifiable'), 'snapshot is nonmodifiable')
+    assert_true(index(['nofile', 'nowrite'], getbufvar(pane.bufnr, '&buftype')) >= 0)
+    assert_true(getwinvar(pane.winid, '&diff'), 'actual Vim diff is enabled')
+  endfor
+enddef
+
+def Local()
+  execute 'cd ' .. fnameescape(test_tmp .. '/local repo 中文/nested/subdir')
+  var cwd = getcwd()
+  execute 'edit ' .. fnameescape('../../both.txt')
+  setline(1, ['UNSAVED user edits'])
+  var userbuf = bufnr()
+  var origin = win_getid()
+  var initial_buffers = getbufinfo()->mapnew((_, b) => b.bufnr)
+  var initial_autocmds = execute('autocmd')
+  var initial_tabs = tabpagenr('$')
+
+  DiffviewOpen
+  assert_equal(initial_tabs + 1, tabpagenr('$'))
+  assert_equal(cwd, getcwd(), 'opening preserves cwd')
+  assert_equal(Panel(), win_getid(), 'initial focus is file panel')
+  assert_match('Disk snapshots; unsaved edits excluded', join(getline(1, '$'), "\n"))
+  assert_false(join(getbufline(winbufnr(Panel()), 1, '$'), "\n") =~ 'ignored.txt')
+  assert_false(join(getbufline(winbufnr(Panel()), 1, '$'), "\n") =~ 'same.txt', 'no stat-only row beside real changes')
+  Select('Staged', 'both.txt')
+  Pair(['HEAD both'], ['INDEX both'])
+  Select('Unstaged', 'both.txt')
+  Pair(['INDEX both'], ['DISK both'])
+  Select('Staged', 'staged.txt')
+  Pair(['HEAD staged'], ['INDEX staged'])
+  Select('Unstaged', 'unstaged.txt')
+  Pair(['HEAD unstaged'], ['DISK unstaged'])
+  Select('Unstaged', 'mode.txt')
+  Pair(['same mode bytes'], ['same mode bytes'])
+  Select('Untracked', 'untracked 空格.txt')
+  Pair([''], ['DISK untracked'])
+
+  Select('Unstaged', 'both.txt')
+  var before = getbufline(winbufnr(Panel()), 1, '$')
+  execute 'cd ' .. fnameescape(test_tmp .. '/nonrepo')
+  DiffviewRefresh
+  assert_equal(before, getbufline(winbufnr(Panel()), 1, '$'), 'refresh retains repository')
+  Pair(['INDEX both'], ['DISK both'])
+  assert_equal(['UNSAVED user edits'], getbufline(userbuf, 1, '$'))
+  assert_true(getbufvar(userbuf, '&modified'))
+  DiffviewClose
+  assert_equal(initial_tabs, tabpagenr('$'))
+  assert_equal(origin, win_getid(), 'close returns to origin')
+  assert_equal(initial_buffers, getbufinfo()->mapnew((_, b) => b.bufnr), 'no scratch buffers leak')
+  assert_equal(initial_autocmds, execute('autocmd'), 'no active autocmds leak')
+  assert_false(&diff, 'origin window has no leaked diff')
+  assert_equal(['UNSAVED user edits'], getline(1, '$'))
+  assert_true(&modified)
+  DiffviewClose
+
+  execute 'cd ' .. fnameescape(cwd)
+  call g:ToggleDiffView()
+  assert_equal(initial_tabs + 1, tabpagenr('$'))
+  call g:ToggleDiffView()
+  assert_equal(initial_tabs, tabpagenr('$'))
+  assert_true(getbufvar(userbuf, '&modified'))
+enddef
+
+def Clean()
+  execute 'cd ' .. fnameescape(test_tmp .. '/clean')
+  DiffviewOpen
+  var rows = join(getbufline(winbufnr(Panel()), 1, '$'), "\n")
+  assert_match('No changes', rows)
+  assert_false(rows =~ 'file.txt', 'stale stat produces no false M row')
+  DiffviewRefresh
+  rows = join(getbufline(winbufnr(Panel()), 1, '$'), "\n")
+  assert_match('No changes', rows)
+  assert_false(rows =~ 'file.txt', 'refresh still omits stat-only row')
+  DiffviewClose
+  assert_equal(1, tabpagenr('$'))
+enddef
+
+def Unborn()
+  execute 'cd ' .. fnameescape(test_tmp .. '/unborn')
+  DiffviewOpen
+  Select('Staged', 'first.txt')
+  Pair([''], ['INDEX unborn'])
+  Select('Unstaged', 'first.txt')
+  Pair(['INDEX unborn'], ['DISK unborn'])
+  Select('Untracked', 'new.txt')
+  Pair([''], ['DISK new'])
+  DiffviewClose
+enddef
+
+def Nonrepo()
+  execute 'cd ' .. fnameescape(test_tmp .. '/nonrepo')
+  var initial_buffers = getbufinfo()->mapnew((_, b) => b.bufnr)
+  var error = ''
+  try
+    DiffviewOpen
+  catch
+    error = v:exception
+  endtry
+  var messages = error .. execute('messages') .. v:errmsg
+  assert_match('\[diffview\]', messages, 'nonrepo reports tagged error')
+  assert_equal(1, tabpagenr('$'), 'failure creates no tab')
+  assert_equal(1, winnr('$'), 'failure creates no split')
+  assert_equal(initial_buffers, getbufinfo()->mapnew((_, b) => b.bufnr))
+enddef
+
+def Special()
+  execute 'cd ' .. fnameescape(test_tmp .. '/special')
+  DiffviewOpen
+  var rows = getbufline(winbufnr(Panel()), 1, '$')
+  assert_false(join(rows, "\n") =~ "\t", 'tab in filename is escaped for display')
+  assert_false(join(rows, "\n") =~ nr2char(1), 'SOH in filename is escaped for display')
+  var names = ['space 中文.txt', '-leading.txt', 'semi;', 'tab', 'line', 'ctrl', 'literal', ':(glob)**']
+  for i in range(len(names))
+    assert_equal(2, len(filter(copy(rows), (_, row) => stridx(row, names[i]) >= 0)),
+      'one displayed row per section for special path ' .. names[i])
+    Select('Staged', names[i])
+    Pair(['HEAD special ' .. (i + 1)], ['INDEX special ' .. (i + 1)])
+    Select('Unstaged', names[i])
+    Pair(['INDEX special ' .. (i + 1)], ['DISK special ' .. (i + 1)])
+  endfor
+  assert_false(filereadable('INJECTED'), 'filename was never executed as shell code')
+  DiffviewClose
+enddef
+
+def Refresh()
+  execute 'cd ' .. fnameescape(test_tmp .. '/refresh')
+  DiffviewOpen
+  Select('Unstaged', 'file.txt')
+  Pair(['HEAD refresh'], ['DISK before refresh'])
+  writefile(['DISK refreshed'], 'file.txt')
+  writefile(['NEW after open'], 'new.txt')
+  Pair(['HEAD refresh'], ['DISK before refresh'])
+  assert_false(join(getbufline(winbufnr(Panel()), 1, '$'), "\n") =~ 'new.txt',
+    'no automatic file-list refresh')
+  win_gotoid(Panel())
+  normal r
+  Pair(['HEAD refresh'], ['DISK refreshed'])
+  Select('Untracked', 'new.txt')
+  Pair([''], ['NEW after open'])
+  win_gotoid(Panel())
+  normal q
+  assert_equal(1, tabpagenr('$'), 'q closes view')
+  assert_false(&diff)
+enddef
+
+def WindowOptions(id: number): list<any>
+  var tabwin = win_id2tabwin(id)
+  return ['diff', 'scrollbind', 'cursorbind', 'foldmethod', 'foldcolumn', 'wrap']->mapnew(
+    (_, option) => gettabwinvar(tabwin[0], tabwin[1], '&' .. option))
+enddef
+
+def PluginBuffers(): list<number>
+  return getbufinfo()->filter((_, b) => getbufvar(b.bufnr, 'diffview_role', '') != '')
+    ->mapnew((_, b) => b.bufnr)
+enddef
+
+def WaitForCleanup()
+  var started = reltime()
+  while !empty(PluginBuffers()) && reltimefloat(reltime(started)) < 1.0
+    sleep 10m
+  endwhile
+  assert_equal([], PluginBuffers(), 'manual cleanup completes within 1 second')
+enddef
+
+def WaitForTimers(ids: list<number>)
+  var started = reltime()
+  while !empty(filter(copy(ids), (_, id) => !empty(timer_info(id))))
+      && reltimefloat(reltime(started)) < 1.0
+    sleep 10m
+  endwhile
+  assert_equal([], filter(copy(ids), (_, id) => !empty(timer_info(id))), 'old timers finish within 1 second')
+enddef
+
+def Lifecycle()
+  execute 'cd ' .. fnameescape(test_tmp .. '/lifecycle')
+  set nohidden autowriteall
+  edit original.txt
+  var origin = win_getid()
+  var original = bufnr()
+  vsplit replacement.txt
+  var unrelated = win_getid()
+  var replacement = bufnr()
+  setlocal diff scrollbind cursorbind foldmethod=manual nowrap
+  var options = WindowOptions(unrelated)
+  setline(1, ['UNSAVED replacement'])
+  win_gotoid(origin)
+  setline(1, ['UNSAVED original'])
+
+  DiffviewOpen
+  var left = getwininfo()->filter((_, w) => getbufvar(w.bufnr, 'diffview_role', '') == 'left')[0].winid
+  win_execute(left, 'close')
+  WaitForCleanup()
+  DiffviewClose
+  assert_equal(['UNSAVED original'], getbufline(original, 1, '$'))
+  assert_true(getbufvar(original, '&modified'), 'manual closure keeps original dirty')
+  assert_equal(['UNSAVED replacement'], getbufline(replacement, 1, '$'))
+  assert_true(getbufvar(replacement, '&modified'), 'manual closure keeps other buffer dirty')
+  assert_equal(options, WindowOptions(unrelated), 'unrelated window options survive manual close')
+
+  win_gotoid(origin)
+  DiffviewOpen
+  var right = getwininfo()->filter((_, w) => getbufvar(w.bufnr, 'diffview_role', '') == 'right')[0].winid
+  win_gotoid(right)
+  execute 'buffer ' .. replacement
+  var lefts = getwininfo()->filter((_, w) => getbufvar(w.bufnr, 'diffview_role', '') == 'left')
+  if !empty(lefts)
+    win_execute(lefts[0].winid, 'close')
+  endif
+  WaitForCleanup()
+  assert_true(win_id2tabwin(right)[0] > 0, 'inserted dirty user pane remains open')
+  assert_equal(replacement, winbufnr(right), 'inserted pane still shows user buffer')
+  var tabs_before_error = tabpagenr('$')
+  var error = ''
+  try
+    execute 'DiffviewOpen invalid-test-revision HEAD'
+  catch
+    error = v:exception
+  endtry
+  assert_match('\[diffview\]', error .. execute('messages') .. v:errmsg)
+  assert_equal(tabs_before_error, tabpagenr('$'), 'invalid replacement creates no extra tab')
+  try
+    DiffviewRefresh
+  catch
+    assert_match('\[diffview\]', v:exception)
+  endtry
+  DiffviewClose
+  win_gotoid(origin)
+  DiffviewOpen
+  DiffviewClose
+
+  # A pending callback for the old view must not clean up its replacement.
+  win_gotoid(origin)
+  DiffviewOpen
+  var existing_timers = timer_info()->mapnew((_, timer) => timer.id)
+  left = getwininfo()->filter((_, w) => getbufvar(w.bufnr, 'diffview_role', '') == 'left')[0].winid
+  win_execute(left, 'close')
+  var old_timers = timer_info()->mapnew((_, timer) => timer.id)
+    ->filter((_, id) => index(existing_timers, id) < 0)
+  assert_false(empty(old_timers), 'fixture reaches a pending old-cleanup timer before reopening')
+  DiffviewOpen
+  var new_buffers = PluginBuffers()
+  assert_equal(3, len(new_buffers))
+  WaitForTimers(old_timers)
+  assert_equal(new_buffers, PluginBuffers(), 'old timer preserves replacement view buffers')
+  Pair([''], ['DISK tracked change'])
+  DiffviewClose
+  WaitForCleanup()
+
+  win_gotoid(origin)
+  DiffviewOpen
+  tabclose
+  WaitForCleanup()
+  assert_equal(['UNSAVED original'], getbufline(original, 1, '$'))
+  assert_true(getbufvar(original, '&modified'))
+  assert_equal(['UNSAVED replacement'], getbufline(replacement, 1, '$'))
+  assert_true(getbufvar(replacement, '&modified'))
+  assert_equal(options, WindowOptions(unrelated), 'unrelated window options survive replacement')
+  assert_equal(['DISK original'], readfile('original.txt'), 'autowriteall never saves original')
+  assert_equal(['DISK replacement'], readfile('replacement.txt'), 'autowriteall never saves replacement')
+enddef
+
+def Ownership()
+  execute 'cd ' .. fnameescape(test_tmp .. '/lifecycle')
+  set nohidden autowriteall
+  DiffviewOpen
+  var right = getwininfo()->filter((_, w) => getbufvar(w.bufnr, 'diffview_role', '') == 'right')[0].winid
+  win_gotoid(right)
+  enew
+  setline(1, ['UNSAVED user-owned pane'])
+  var userbuf = bufnr()
+  setlocal diff scrollbind cursorbind foldmethod=marker foldcolumn=3 wrap
+  var before = WindowOptions(right)
+  DiffviewClose
+  assert_true(win_id2tabwin(right)[0] > 0, 'user-owned pane survives close')
+  var after = WindowOptions(right)
+  writefile([json_encode({before: before, after: after,
+    content: getbufline(userbuf, 1, '$'), modified: getbufvar(userbuf, '&modified')})],
+    test_tmp .. '/ownership.facts.json')
+  assert_equal(before, after, 'close preserves options of pane now owned by user')
+  assert_equal(['UNSAVED user-owned pane'], getbufline(userbuf, 1, '$'))
+  assert_true(getbufvar(userbuf, '&modified'))
+  WaitForCleanup()
+enddef
+
+def Ancestor()
+  execute 'cd ' .. fnameescape(test_tmp .. '/ancestor')
+  DiffviewOpen
+  Select('Unstaged', 'dir/file.txt')
+  Pair(['HEAD inside'], ['DISK inside'])
+  Select('Unstaged', 'dir/forced.dat')
+  Unavailable('\cBinary')
+  Select('Unstaged', 'dir/file.txt')
+  var panel = Panel()
+  var rightbuf = getwininfo()->filter((_, w) => getbufvar(w.bufnr, 'diffview_role', '') == 'right')[0].bufnr
+  try
+    assert_equal(0, rename('dir', 'saved-dir'))
+    var link = job_start(['ln', '-s', test_tmp .. '/outside', 'dir'],
+      {in_io: 'null', out_io: 'null', err_io: 'file', err_name: test_tmp .. '/ancestor.link.log'})
+    var started = reltime()
+    while job_status(link) == 'run' && reltimefloat(reltime(started)) < 1.0
+      sleep 10m
+    endwhile
+    assert_equal('dead', job_status(link))
+    assert_equal(0, job_info(link).exitval)
+    assert_equal('link', getftype('dir'), 'fixture installs a symlink ancestor')
+    win_gotoid(panel)
+    normal o
+    var observed = getbufline(rightbuf, 1, '$')
+    var messages = execute('messages') .. v:errmsg
+    writefile([json_encode({observed: observed, messages: messages})],
+      test_tmp .. '/ancestor.facts.json')
+    assert_false(index(observed, 'OUTSIDE fixture marker') >= 0,
+      'selection must not follow a symlink ancestor outside repository')
+    assert_match('\c\%(symlink\|unsupported\|cannot read\)', join(observed, "\n") .. messages,
+      'symlink ancestor is an explicit error or unsupported entry')
+    Select('Unstaged', 'dir/forced.dat')
+    Unavailable('\csymlink\|unsupported')
+    assert_false(index(getbufline(rightbuf, 1, '$'), 'OUTSIDE fixture marker') >= 0,
+      'binary classification must not bypass ancestor checks')
+  finally
+    DiffviewClose
+    if getftype('dir') == 'link'
+      delete('dir')
+    endif
+    if isdirectory('saved-dir')
+      assert_equal(0, rename('saved-dir', 'dir'))
+    endif
+  endtry
+enddef
+
+def Ref(name: string): string
+  return readfile(test_tmp .. '/refs/' .. name)[0]
+enddef
+
+def Role(role: string): dict<any>
+  var windows = getwininfo()->filter((_, w) => getbufvar(w.bufnr, 'diffview_role', '') == role)
+  assert_equal(1, len(windows), 'one visible ' .. role .. ' pane')
+  return windows[0]
+enddef
+
+def PaneOption(role: string, option: string): any
+  var tabwin = win_id2tabwin(Role(role).winid)
+  return gettabwinvar(tabwin[0], tabwin[1], '&' .. option)
+enddef
+
+def HistoricalIds(left: list<string>, right: list<string>)
+  var expected = [left, right]
+  for i in range(2)
+    var label = PaneOption(i == 0 ? 'left' : 'right', 'statusline')
+    if empty(expected[i])
+      assert_match('EMPTY', label)
+    else
+      assert_false(empty(filter(copy(expected[i]), (_, oid) => stridx(label, oid[0 : 6]) >= 0)),
+        'visible resolved object ID in ' .. label)
+    endif
+  endfor
+enddef
+
+def NoChanges()
+  assert_match('No changes', join(getbufline(Role('panel').bufnr, 1, '$'), "\n"))
+  for side in ['left', 'right']
+    assert_equal(['No changes'], getbufline(Role(side).bufnr, 1, '$'))
+    assert_equal('', getbufvar(Role(side).bufnr, 'diffview_source'), 'empty view clears old source metadata')
+    assert_match('No changes', PaneOption(side, 'statusline'))
+    assert_false(PaneOption(side, 'diff'))
+  endfor
+enddef
+
+def Unavailable(pattern: string)
+  for side in ['left', 'right']
+    assert_match(pattern, join(getbufline(Role(side).bufnr, 1, '$'), "\n"))
+    assert_true(getbufvar(Role(side).bufnr, '&readonly'))
+    assert_false(getbufvar(Role(side).bufnr, '&modifiable'))
+    assert_false(PaneOption(side, 'diff'), 'unsupported content is not a fake text diff')
+  endfor
+enddef
+
+def Reject(command: string)
+  messages clear
+  v:errmsg = ''
+  var error = ''
+  try
+    execute command
+  catch
+    error = v:exception
+  endtry
+  assert_match('\[diffview\]', error .. execute('messages') .. v:errmsg, command)
+enddef
+
+def Trees()
+  execute 'cd ' .. fnameescape(test_tmp .. '/history repo 中文/nested')
+  DiffviewOpen left right
+  Select('', 'shared.txt')
+  Pair(['LEFT shared'], ['RIGHT shared'])
+  HistoricalIds([Ref('left'), Ref('left-tree')], [Ref('right'), Ref('right-tree')])
+  assert_match('left', PaneOption('left', 'statusline'))
+  assert_match('right', PaneOption('right', 'statusline'))
+  assert_false(join(getbufline(Role('panel').bufnr, 1, '$'), "\n") =~ 'local-only.txt')
+  Select('', 'left-only.txt')
+  Pair(['LEFT only'], [''])
+  Select('', 'added.txt')
+  Pair([''], ['RIGHT added'])
+  Select('', 'deleted.txt')
+  Pair(['ROOT deleted'], [''])
+  Select('', 'new 名称.txt')
+  Pair(['stable rename content'], ['stable rename content'])
+  assert_equal('old name.txt', getbufvar(Role('left').bufnr, 'diffview_path'))
+  assert_equal('new 名称.txt', getbufvar(Role('right').bufnr, 'diffview_path'))
+  Select('', 'mode.txt')
+  Pair(['stable mode content'], ['stable mode content'])
+  Select('', 'empty-added.txt')
+  Pair([''], [''])
+  assert_match('EMPTY', PaneOption('left', 'statusline'))
+  for path in ['binary.bin', 'marked.dat']
+    Select('', path)
+    Unavailable('\cBinary')
+  endfor
+  DiffviewClose
+
+  for alias in ["quote'branch", 'dollar$(touch${IFS}INJECTED_REF)', 'pipe|branch']
+    execute 'DiffviewOpen left ' .. alias
+    Select('', 'shared.txt')
+    Pair(['LEFT shared'], ['RIGHT shared'])
+    assert_false(filereadable('INJECTED_REF') || filereadable('../INJECTED_REF'),
+      'revision is never evaluated by a shell')
+    DiffviewClose
+  endfor
+  execute 'DiffviewOpen left:tree\ dir right:tree\ dir'
+  Select('', 'nested.txt')
+  Pair(['BASE subtree'], ['RIGHT subtree'])
+  HistoricalIds([Ref('left-subtree')], [Ref('right-subtree')])
+  DiffviewClose
+
+  DiffviewOpen root^{tree} right^{tree}
+  Select('', 'shared.txt')
+  Pair(['BASE shared'], ['RIGHT shared'])
+  HistoricalIds([Ref('root-tree')], [Ref('right-tree')])
+  DiffviewOpen left left
+  NoChanges()
+  DiffviewRefresh
+  NoChanges()
+  DiffviewClose
+
+  DiffBranch left
+  Select('', 'shared.txt')
+  Pair(['LEFT shared'], ['MERGED shared'])
+  call g:ToggleDiffView()
+  assert_equal([], PluginBuffers(), 'legacy Toggle closes a historical view')
+  call g:DiffBranch('left')
+  Select('', 'shared.txt')
+  Pair(['LEFT shared'], ['MERGED shared'])
+  DiffviewClose
+enddef
+
+def Commits()
+  execute 'cd ' .. fnameescape(test_tmp .. '/history repo 中文')
+  execute 'DiffviewCommit left'
+  Select('', 'shared.txt')
+  Pair(['BASE shared'], ['LEFT shared'])
+  HistoricalIds([Ref('root')], [Ref('left')])
+  Select('', 'left-only.txt')
+  Pair([''], ['LEFT only'])
+  execute 'DiffviewCommit right'
+  Select('', 'marked.dat')
+  Unavailable('\cBinary')
+  execute 'DiffviewCommit root'
+  Select('', 'shared.txt')
+  Pair([''], ['BASE shared'])
+  HistoricalIds([], [Ref('root')])
+  Select('', 'marked.dat')
+  Unavailable('\cBinary')
+  execute 'DiffviewCommit merged'
+  Select('', 'shared.txt')
+  Pair(['RIGHT shared'], ['MERGED shared'])
+  HistoricalIds([Ref('right')], [Ref('merge')])
+  Select('', 'left-only.txt')
+  Pair([''], ['LEFT only'])
+  assert_false(join(getbufline(Role('panel').bufnr, 1, '$'), "\n") =~ 'deleted.txt',
+    'merge view compares parent 1, not root/merge base')
+  execute 'DiffviewCommit'
+  Select('', 'shared.txt')
+  Pair(['RIGHT shared'], ['MERGED shared'])
+  HistoricalIds([Ref('right')], [Ref('merge')])
+  assert_match('HEAD', PaneOption('right', 'statusline'))
+  DiffviewClose
+enddef
+
+def HistoricalRefresh()
+  var history = test_tmp .. '/history repo 中文'
+  execute 'cd ' .. fnameescape(history)
+  var origin = win_getid()
+  DiffviewOpen left moving
+  Select('', 'shared.txt')
+  Pair(['LEFT shared'], ['RIGHT shared'])
+  try
+    writefile([Ref('merge')], history .. '/.git/refs/heads/moving')
+    Select('', 'shared.txt')
+    Pair(['LEFT shared'], ['RIGHT shared'])
+    win_gotoid(origin)
+    execute 'cd ' .. fnameescape(test_tmp .. '/nonrepo')
+    DiffviewRefresh
+    assert_equal(['MERGED shared'], getbufline(Role('right').bufnr, 1, '$'))
+    assert_equal('shared.txt', getbufvar(Role('right').bufnr, 'diffview_path'))
+    assert_match('moving', PaneOption('right', 'statusline'))
+    HistoricalIds([Ref('left'), Ref('left-tree')], [Ref('merge'), Ref('merge-tree')])
+  finally
+    writefile([Ref('right')], history .. '/.git/refs/heads/moving')
+    DiffviewClose
+  endtry
+
+  execute 'cd ' .. fnameescape(history)
+  execute 'DiffviewCommit moving'
+  Select('', 'shared.txt')
+  Pair(['BASE shared'], ['RIGHT shared'])
+  try
+    writefile([Ref('merge')], history .. '/.git/refs/heads/moving')
+    Select('', 'shared.txt')
+    Pair(['BASE shared'], ['RIGHT shared'])
+    DiffviewRefresh
+    Pair(['RIGHT shared'], ['MERGED shared'])
+    HistoricalIds([Ref('right')], [Ref('merge')])
+    assert_match('moving', PaneOption('right', 'statusline'))
+  finally
+    writefile([Ref('right')], history .. '/.git/refs/heads/moving')
+    DiffviewClose
+  endtry
+enddef
+
+def Errors()
+  var history = test_tmp .. '/history repo 中文'
+  execute 'cd ' .. fnameescape(history)
+  DiffviewOpen left right
+  Select('', 'shared.txt')
+  var buffers = PluginBuffers()
+  var tabs = tabpagenr('$')
+  for command in ['DiffviewOpen HEAD', 'DiffviewOpen left right HEAD',
+      'DiffviewOpen left..right HEAD', 'DiffviewOpen left...right HEAD',
+      'DiffviewOpen missing-test-revision HEAD', 'DiffviewOpen --help HEAD',
+      'DiffviewOpen ' .. Ref('blob') .. ' HEAD', 'DiffviewCommit missing-test-revision',
+      'DiffviewCommit HEAD HEAD', 'DiffviewCommit left..right',
+      'DiffviewCommit --help', 'DiffviewCommit root^{tree}', 'DiffviewCommit ' .. Ref('blob')]
+    Reject(command)
+    assert_equal(buffers, PluginBuffers(), 'error preserves view buffers: ' .. command)
+    assert_equal(tabs, tabpagenr('$'))
+    Pair(['LEFT shared'], ['RIGHT shared'])
+  endfor
+  for directory in ['nonrepo', 'bare.git']
+    execute 'cd ' .. fnameescape(test_tmp .. '/' .. directory)
+    Reject('DiffviewOpen')
+    assert_equal(buffers, PluginBuffers())
+    Pair(['LEFT shared'], ['RIGHT shared'])
+  endfor
+  execute 'cd ' .. fnameescape(test_tmp .. '/shallow')
+  Reject('DiffviewCommit HEAD')
+  assert_equal(buffers, PluginBuffers(), 'missing shallow parent preserves previous view')
+  Pair(['LEFT shared'], ['RIGHT shared'])
+  DiffviewClose
+enddef
+
+def Exclusions()
+  execute 'cd ' .. fnameescape(test_tmp .. '/history repo 中文')
+  for command in ['DiffviewOpen ^left right', 'DiffviewOpen left ^right',
+      'DiffviewOpen ^left ^right', 'DiffviewCommit ^HEAD']
+    DiffviewOpen left right
+    Select('', 'shared.txt')
+    var buffers = PluginBuffers()
+    var labels = [PaneOption('left', 'statusline'), PaneOption('right', 'statusline')]
+    var tabs = tabpagenr('$')
+    Reject(command)
+    assert_equal(buffers, PluginBuffers(), 'exclusion preserves old view: ' .. command)
+    assert_equal(labels, [PaneOption('left', 'statusline'), PaneOption('right', 'statusline')],
+      'exclusion preserves visible source labels: ' .. command)
+    assert_equal(tabs, tabpagenr('$'))
+    Pair(['LEFT shared'], ['RIGHT shared'])
+    DiffviewClose
+  endfor
+  DiffviewOpen merged^1 merged
+  Select('', 'shared.txt')
+  Pair(['RIGHT shared'], ['MERGED shared'])
+  DiffviewClose
+  execute 'DiffviewCommit HEAD^1'
+  Select('', 'shared.txt')
+  Pair(['BASE shared'], ['RIGHT shared'])
+  HistoricalIds([Ref('root')], [Ref('right')])
+  DiffviewClose
+enddef
+
+def Edges()
+  execute 'cd ' .. fnameescape(test_tmp .. '/edges')
+  DiffviewOpen
+  Select('', 'deleted.txt')
+  Pair(['HEAD deleted'], [''])
+  assert_match('EMPTY', PaneOption('right', 'statusline'))
+  Select('Staged', 'empty-added.txt')
+  Pair([''], [''])
+  Select('', 'new.txt')
+  Pair(['unchanged rename'], ['unchanged rename'])
+  assert_equal('old.txt', getbufvar(Role('left').bufnr, 'diffview_path'))
+  assert_equal('new.txt', getbufvar(Role('right').bufnr, 'diffview_path'))
+  Select('Unstaged', 'mode.txt')
+  Pair(['unchanged mode'], ['unchanged mode'])
+  Select('Unstaged', 'noeol.txt')
+  Pair(['HEAD no final newline'], ['DISK no final newline'])
+  assert_false(getbufvar(Role('left').bufnr, '&endofline'))
+  assert_false(getbufvar(Role('right').bufnr, '&endofline'))
+  for path in ['binary.bin', 'marked.dat']
+    Select('Unstaged', path)
+    Unavailable('\cBinary')
+  endfor
+  Select('Staged', 'marked-staged.dat')
+  Unavailable('\cBinary')
+  Select('Untracked', 'marked-untracked.dat')
+  Unavailable('\cBinary')
+  for path in ['leaf-link', 'untracked-link']
+    Select('', path)
+    Unavailable('\csymlink\|unsupported')
+    assert_false(join(getbufline(Role('right').bufnr, 1, '$'), "\n") =~ 'OUTSIDE fixture marker')
+  endfor
+  Select('', 'submodule')
+  Unavailable('\csubmodule\|unsupported')
+  Select('', 'conflict.txt')
+  Unavailable('\cunmerged\|conflict')
+  DiffviewClose
+enddef
+
+def CrossTab()
+  execute 'cd ' .. fnameescape(test_tmp .. '/cross-tab')
+  var origin = win_getid()
+  DiffviewOpen
+  Select('Unstaged', 'file.txt')
+  Pair(['HEAD cross'], ['DISK cross'])
+  var unrelated = -1
+  try
+    assert_equal(0, delete('file.txt'))
+    win_gotoid(origin)
+    DiffviewRefresh
+    assert_equal([''], getbufline(Role('right').bufnr, 1, '$'))
+    assert_match('EMPTY', PaneOption('right', 'statusline'), 'cross-tab absent-side label')
+    assert_match('EMPTY', getbufvar(Role('right').bufnr, 'diffview_source'))
+    tabnew
+    unrelated = bufnr()
+    setline(1, ['UNSAVED unrelated tab'])
+    writefile(['HEAD cross'], 'file.txt')
+    DiffviewRefresh
+    NoChanges()
+    writefile(['DISK cross'], 'file.txt')
+    DiffviewRefresh
+    assert_equal(['DISK cross'], getbufline(Role('right').bufnr, 1, '$'))
+    assert_equal(['HEAD cross'], getbufline(Role('left').bufnr, 1, '$'))
+    assert_match('INDEX', getbufvar(Role('left').bufnr, 'diffview_source'))
+    assert_match('INDEX', PaneOption('left', 'statusline'))
+    assert_match('WORKTREE', getbufvar(Role('right').bufnr, 'diffview_source'))
+    assert_match('WORKTREE', PaneOption('right', 'statusline'), 'cross-tab label restored with changes')
+  finally
+    writefile(['DISK cross'], 'file.txt')
+    DiffviewClose
+  endtry
+  assert_equal(['UNSAVED unrelated tab'], getbufline(unrelated, 1, '$'))
+  assert_true(getbufvar(unrelated, '&modified'), 'cross-tab refresh preserves unrelated dirty tab')
+enddef
+
+def ReadFailure()
+  execute 'cd ' .. fnameescape(test_tmp .. '/read-failure')
+  DiffviewOpen
+  Select('Unstaged', 'file.txt')
+  var saved_path = $PATH
+  try
+    assert_equal(0, rename('file.txt', 'saved.txt'))
+    Reject('normal o')
+    Pair(['HEAD readable'], ['DISK readable'])
+    assert_equal(0, rename('saved.txt', 'file.txt'))
+    setenv('PATH', test_tmp .. '/no-tools')
+    Reject('DiffviewRefresh')
+    Pair(['HEAD readable'], ['DISK readable'])
+    setenv('PATH', saved_path)
+    Select('Unstaged', 'forced.dat')
+    Unavailable('\cBinary')
+    var previous = getbufline(Role('right').bufnr, 1, '$')
+    assert_equal(0, rename('forced.dat', 'saved-forced.dat'))
+    Reject('normal o')
+    assert_equal(previous, getbufline(Role('right').bufnr, 1, '$'),
+      'missing forced-binary file reports error and preserves old comparison')
+  finally
+    setenv('PATH', saved_path)
+    if filereadable('saved.txt')
+      rename('saved.txt', 'file.txt')
+    endif
+    if filereadable('saved-forced.dat')
+      rename('saved-forced.dat', 'forced.dat')
+    endif
+    DiffviewClose
+  endtry
+enddef
+
+def Navigation()
+  execute 'cd ' .. fnameescape(test_tmp .. '/local repo 中文')
+  DiffviewOpen
+  Select('Staged', 'both.txt')
+  normal ]f
+  Pair(['HEAD staged'], ['INDEX staged'])
+  normal [f
+  Pair(['HEAD both'], ['INDEX both'])
+  normal [f
+  Pair([''], ['DISK untracked'])
+  normal ]f
+  Pair(['HEAD both'], ['INDEX both'])
+  var panel = Panel()
+  feedkeys("\<Tab>", 'xt')
+  assert_equal('left', b:diffview_role)
+  feedkeys("\<S-Tab>", 'xt')
+  assert_equal(panel, win_getid())
+  for i in range(3)
+    feedkeys("\<Tab>", 'xt')
+  endfor
+  assert_equal(panel, win_getid(), 'pane navigation wraps')
+  search('^Staged$', 'w')
+  execute "normal \<CR>"
+  Pair(['HEAD both'], ['INDEX both'])
+  normal q
+  for key in [']f', '[f', 'r', 'q', '<Tab>']
+    assert_equal({}, maparg(key, 'n', false, true), 'mapping is local: ' .. key)
+  endfor
+enddef
+
+def BinaryClean()
+  execute 'cd ' .. fnameescape(test_tmp .. '/binary-clean')
+  DiffviewOpen
+  NoChanges()
+  DiffviewRefresh
+  NoChanges()
+  DiffviewClose
+enddef
+
+def BinaryMixed()
+  execute 'cd ' .. fnameescape(test_tmp .. '/binary-mixed')
+  DiffviewOpen
+  var rows = getbufline(Role('panel').bufnr, 1, '$')
+  for path in ['forced.dat', 'noeol.dat', 'crlf.txt']
+    assert_equal(-1, stridx(join(rows, "\n"), path), 'binary stale-stat row omitted: ' .. path)
+  endfor
+  assert_equal(9, len(filter(copy(rows), (_, row) => row =~ '^  [AMDR] ')), 'nine real changes retained')
+  assert_equal(2, len(filter(copy(rows), (_, row) => stridx(row, 'mode.dat') >= 0)), 'both mode-only groups retained')
+  for section in ['Staged', 'Unstaged']
+    Select(section, 'real.dat')
+    Unavailable('\cBinary')
+    Select(section, 'mode.dat')
+    Unavailable('\cBinary')
+  endfor
+  Select('Unstaged', 'text.txt')
+  Pair(['HEAD ordinary text'], ['DISK ordinary text'])
+  Select('Unstaged', 'nul.bin')
+  Unavailable('\cBinary')
+  Select('Staged', 'added.dat')
+  Unavailable('\cBinary')
+  Select('', 'empty.dat')
+  assert_equal('Unstaged', getbufvar(Role('right').bufnr, 'diffview_section'))
+  Unavailable('\cBinary')
+  Select('', 'rename-new.dat')
+  assert_equal('rename-old.dat', getbufvar(Role('left').bufnr, 'diffview_path'))
+  assert_equal('rename-new.dat', getbufvar(Role('right').bufnr, 'diffview_path'))
+  Unavailable('\cBinary')
+  DiffviewRefresh
+  assert_equal(rows, getbufline(Role('panel').bufnr, 1, '$'), 'binary refresh retains real rows and omits false ones')
+  Unavailable('\cBinary')
+  DiffviewClose
+enddef
+
+def Large()
+  execute 'cd ' .. fnameescape(test_tmp .. '/large')
+  var started = reltime()
+  DiffviewOpen
+  var opened = reltimefloat(reltime(started))
+  var content = getbufline(Role('right').bufnr, 1, '$')
+  assert_equal(20000, len(content))
+  assert_equal(sha256(join(readfile('000-large.txt'), "\n")), sha256(join(content, "\n")))
+  started = reltime()
+  Select('Untracked', 'item-200.txt')
+  Pair([''], ['item 200'])
+  var selected = reltimefloat(reltime(started))
+  started = reltime()
+  DiffviewRefresh
+  var refreshed = reltimefloat(reltime(started))
+  Pair([''], ['item 200'])
+  started = reltime()
+  DiffviewClose
+  writefile([json_encode({files: 201, bytes: getfsize('000-large.txt'),
+    open_seconds: opened, select_seconds: selected, refresh_seconds: refreshed,
+    close_seconds: reltimefloat(reltime(started))})], test_tmp .. '/large.metrics.json')
+enddef
+
+try
+  assert_true(has('vim9script'))
+  assert_true(has('diff'))
+  assert_true(has('windows'))
+  assert_true(has('job'))
+  assert_true(has('timers'))
+  execute 'set runtimepath^=' .. fnameescape($DIFFVIEW_TEST_RUNTIME)
+  runtime plugin/main.vim
+  if exists(':DiffviewOpen') != 2
+    throw 'DiffviewOpen command unavailable: runtime is not a C01 candidate'
+  endif
+  defcompile
+  if case_name == 'local'
+    Local()
+  elseif case_name == 'clean'
+    Clean()
+  elseif case_name == 'unborn'
+    Unborn()
+  elseif case_name == 'nonrepo'
+    Nonrepo()
+  elseif case_name == 'special'
+    Special()
+  elseif case_name == 'refresh'
+    Refresh()
+  elseif case_name == 'lifecycle'
+    Lifecycle()
+  elseif case_name == 'ownership'
+    Ownership()
+  elseif case_name == 'ancestor'
+    Ancestor()
+  elseif case_name == 'trees'
+    Trees()
+  elseif case_name == 'commits'
+    Commits()
+  elseif case_name == 'historical_refresh'
+    HistoricalRefresh()
+  elseif case_name == 'errors'
+    Errors()
+  elseif case_name == 'exclusions'
+    Exclusions()
+  elseif case_name == 'edges'
+    Edges()
+  elseif case_name == 'cross_tab'
+    CrossTab()
+  elseif case_name == 'read_failure'
+    ReadFailure()
+  elseif case_name == 'navigation'
+    Navigation()
+  elseif case_name == 'binary_clean'
+    BinaryClean()
+  elseif case_name == 'binary_mixed'
+    BinaryMixed()
+  elseif case_name == 'large'
+    Large()
+  else
+    throw 'Unknown test case: ' .. case_name
+  endif
+catch
+  add(v:errors, v:exception .. ' at ' .. v:throwpoint)
+endtry
+
+if !empty(v:errors)
+  writefile(v:errors, test_tmp .. '/' .. case_name .. '.errors')
+  cquit 1
+endif
+writefile(['PASS: ' .. case_name], test_tmp .. '/' .. case_name .. '.result')
+qa!

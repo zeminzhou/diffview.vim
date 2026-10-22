@@ -1,0 +1,130 @@
+*diffview.txt*  Native Vim9 Git diff browser
+Modified 2026-10-22; AGPL-3.0-or-later, see LICENSE.
+Original copyright (C) 2022 zeminzhou <zeminzhou_@outlook.com>.
+
+                                                       *diffview*
+Requires Vim 9.1 with +vim9script, +diff, +windows, +job and +timers,
+and Git on PATH. Verified: macOS, Vim 9.1.1950, Git 2.54.0. No earlier
+minimum patch level is verified. Neovim/older Vim are unsupported.
+Install as a standard Vim plugin/package; no other runtime dependencies.
+
+                                                       *:DiffviewOpen*
+:DiffviewOpen
+    Open one dedicated tab with a file panel and two read-only diff panes.
+    Locate Git from the current working directory, including subdirectories.
+    Do not change cwd. Bare repositories are unsupported. There is at most
+    one active view; another valid open replaces it.
+
+    Section     Left                         Right
+    Staged      HEAD (EMPTY if unborn)        INDEX
+    Unstaged    INDEX                         WORKTREE (disk)
+    Untracked   EMPTY                         WORKTREE (disk)
+
+    A path with both staged/unstaged edits has two entries. Ignored files
+    are excluded. The first file is selected and the panel receives focus.
+    Source/path labels are in each content pane's status line.
+
+    All displayed buffers belong to the plugin and are read-only. Disk
+    snapshots exclude unsaved Vim buffer contents. Browsing never saves,
+    reloads, discards or wipes user buffers, or writes to the Git index.
+    Files/index are read at selection time; a concurrently changing repo
+    is not observed atomically. Historical HEAD blobs stay fixed until
+    refresh. Paths are parsed from NUL-delimited records, with control
+    characters escaped for display.
+
+:DiffviewOpen {left} {right}
+    Directly compare two Git trees, with left/right snapshots in that order.
+    Accept revisions resolving to trees, including tree IDs and rev:directory.
+    There is no implicit merge-base, revision exclusion (^rev), or .. / ...
+    range syntax. Revisions must resolve to one object. Local index,
+    disk and unsaved buffer changes do not enter this comparison.
+
+    Exactly zero or two arguments are accepted. Use Vim's backslash escaping
+    for whitespace, for example: >
+        DiffviewOpen main topic
+        DiffviewOpen main:src\ dir topic:src\ dir
+<
+    Labels show the supplied revisions and resolved short tree object IDs.
+    File entries are grouped under Trees. Ref changes remain invisible until
+    explicit refresh, which resolves the original arguments again.
+
+                                                       *:DiffviewCommit*
+:DiffviewCommit [revision]
+    Show changes introduced by a commit (default HEAD): first parent on the
+    left, the commit on the right. Merge commits always use their first parent;
+    no combined or three-way diff. Root commits compare EMPTY to the commit,
+    without writing a Git object. Missing parent objects in shallow/incomplete
+    history cause a Git error, not a false root-commit view.
+
+    Accept exactly zero or one argument resolving to a commit. Labels identify
+    the revisions and resolved short commit IDs; entries are grouped under
+    Commit. Refresh resolves the original revision argument again.
+
+                                                       *:DiffviewRefresh*
+:DiffviewRefresh
+    Explicitly re-read the original repository, regardless of later cwd
+    changes. Retain selected section/path when it still exists. There is
+    no automatic refresh. Git/read errors retain the previous comparison.
+
+                                                       *:DiffviewClose*
+:DiffviewClose
+    Close plugin windows and wipe plugin-owned buffers, returning to the
+    originating window when available. Safe to repeat. Manual pane/tab
+    closure also cleans up. User-added windows and user buffers survive;
+    a custom layout is not reconstructed. A new open validates and prepares
+    its content/layout before replacing the previous usable view.
+
+                                                       *diffview-keys*
+    File panel: j/k navigate; <CR> or o shows the file and retains panel focus.
+    All panes:  ]f/[f next/previous file (wrap); <Tab>/<S-Tab> cycle panes;
+                r refresh; q close.
+    Diff panes: ]c/[c use Vim's standard diff hunk navigation.
+    All plugin mappings are buffer-local. Section headings are not files.
+    Narrow panes can clip notices and source/path labels. Use Vim's window
+    resizing commands to widen the focused pane.
+
+                                                       *ToggleDiffView()*
+:call ToggleDiffView()
+    Open the local browser, or close any active plugin view.
+    g:ToggleDiffView() is the same global function.
+
+                                                       *:DiffBranch*
+                                                       *DiffBranch()*
+:DiffBranch {branch}
+:call DiffBranch('branch')
+    Compatibility wrappers for DiffviewOpen {branch} HEAD. g:DiffBranch() is
+    the same global function. This intentionally changes the old behavior
+    from ref-to-working-tree to committed-tree comparison. Use DiffviewOpen
+    without arguments to review local staged/unstaged/untracked changes.
+
+    Upstream argument conventions are not interchangeable: Diffview.nvim and
+    CodeDiff commonly compare one revision with the working tree. Here use
+    DiffviewCommit rev for parent-to-commit and DiffviewOpen A B for two trees.
+
+                                                       *diffview-limits*
+    Clean/unborn empty repositories show No changes and remain refreshable.
+    Missing added/deleted sides are empty. Empty existing files are valid;
+    missing-final-newline information is retained in 'endofline'. Rename
+    rows show old -> new; mode-only entries remain visible.
+
+    Binary files, symlinks, submodules and unmerged index entries show an
+    explicit explanation instead of a text diff. Binary detection includes
+    Git's binary markers and -diff attributes, even without NUL bytes.
+    Symlinks are not followed.
+    This includes paths through symlinked directories below the repository root;
+    directory components are checked again when selecting a snapshot.
+    A file disappearing unexpectedly is a read error, not an empty file.
+    Errors are prefixed [diffview]; non-Git/bare cwd creates no partial view.
+
+    Git runs synchronously and large inputs can block Vim. One headless macOS
+    probe on Vim 9.1.1950/Git 2.54.0, with 1,001 modified files and a selected
+    1,000,008-byte file, took about 0.21 s to open and 0.19 s to refresh. This
+    single measurement does not bound other sizes/repos. Real-terminal layout
+    and focus checks are not claimed by the developer's headless checks.
+    Windows support, Git mutations (stage/restore/checkout), history browsing,
+    editable panes, automatic refresh and three-way merges are not provided.
+
+    Inspired by https://github.com/sindrets/diffview.nvim navigation/layout;
+    uses native Vim9/Git, with no Neovim or Lua dependency.
+
+vim:tw=78:ts=4:ft=help:norl:
