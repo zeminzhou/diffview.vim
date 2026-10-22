@@ -4,6 +4,7 @@ vim9script
 # Modified 2026-10-22. Licensed under AGPL-3.0-or-later; see LICENSE.
 
 import autoload 'diffview/git.vim' as git
+import autoload 'diffview/tree.vim' as tree
 
 var view: dict<any> = {}
 var serial = 0
@@ -103,7 +104,11 @@ def Buffer(role: string): number
     setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted
     setlocal nowrap nospell nomodifiable readonly
     setlocal nofoldenable foldcolumn=0 nonumber norelativenumber
-    setlocal filetype=diffview
+    if role == 'panel'
+        setlocal filetype=nerdtree
+    else
+        setlocal filetype=diffview
+    endif
     b:diffview_role = role
     Mappings()
     return buf
@@ -126,38 +131,10 @@ def Put(buf: number, lines: list<string>, eol: bool)
     endtry
 enddef
 
-def Panel()
-    var localMode = view.model.mode == 'local'
-    var lines = ['[diffview] ' .. toupper(view.model.mode), git.Display(view.model.root),
-        localMode ? 'Disk snapshots; unsaved edits excluded'
-            : git.Display(view.model.leftSource .. ' -> ' .. view.model.rightSource), '']
-    var rows: dict<number> = {}
-    var sections = localMode ? ['Staged', 'Unstaged', 'Untracked']
-        : [view.model.mode == 'commit' ? 'Commit' : 'Trees']
-    for section in sections
-        add(lines, section)
-        for i in range(len(view.model.entries))
-            var entry = view.model.entries[i]
-            if entry.section != section
-                continue
-            endif
-            var path = git.Display(entry.path)
-            if entry.status == 'R' || entry.status == 'C'
-                path = git.Display(entry.oldpath) .. ' -> ' .. path
-            endif
-            add(lines, '  ' .. entry.status .. ' ' .. path)
-            rows[string(len(lines))] = i
-        endfor
-        add(lines, '')
-    endfor
-    if empty(view.model.entries)
-        add(lines, 'No changes')
+def Show(index: number, content: dict<any>, reveal = true)
+    if reveal
+        tree.Reveal(view.windows[0], view.tree, index)
     endif
-    view.rows = rows
-    Put(view.buffers[0], lines, true)
-enddef
-
-def Show(index: number, content: dict<any>)
     var entry = view.model.entries[index]
     for side in [1, 2]
         var role = side == 1 ? 'left' : 'right'
@@ -175,12 +152,6 @@ def Show(index: number, content: dict<any>)
         win_execute(win, content.diff ? 'diffthis' : 'diffoff')
     endfor
     view.selected = index
-    for [row, item] in items(view.rows)
-        if item == index
-            win_execute(view.windows[0], 'call cursor(' .. row .. ', 1)')
-            break
-        endif
-    endfor
     if content.diff
         win_execute(view.windows[1], 'diffupdate')
     endif
@@ -216,14 +187,28 @@ export def Select()
     if !Usable()
         return
     endif
-    var row = string(line('.'))
-    if !has_key(view.rows, row)
+    try
+        var node = g:NERDTreeFileNode.GetSelected()
+        if empty(node)
+            return
+        elseif !has_key(node, 'diffview_entry')
+            tree.Navigate(view.windows[0], view.tree, 'toggle')
+            return
+        endif
+        var index = node.diffview_index
+        var content = git.Read(view.model, node.diffview_entry)
+        Show(index, content)
+    catch
+        Error(v:exception)
+    endtry
+enddef
+
+export def Navigate(action: string)
+    if !Usable()
         return
     endif
-    var index = view.rows[row]
     try
-        var content = git.Read(view.model, view.model.entries[index])
-        Show(index, content)
+        tree.Navigate(view.windows[0], view.tree, action)
     catch
         Error(v:exception)
     endtry
@@ -268,12 +253,24 @@ export def Refresh()
             endfor
         endif
         var content = selected < 0 ? {} : git.Read(model, model.entries[selected])
+        var key = tree.CursorKey(view.windows[0], view.tree)
+        var candidate = tree.Build(model, tree.Expansion(view.tree))
+        if view.selected < 0 || !has_key(candidate.diffview_nodes, key)
+            key = 'root'
+            if selected >= 0
+                var node = candidate.diffview_entries[selected]
+                tree.ExpandParents(node)
+                key = node.diffview_key
+            endif
+        endif
+        tree.Install(view.windows[0], candidate)
         view.model = model
-        Panel()
+        view.tree = candidate
+        tree.Cursor(view.windows[0], candidate, key)
         if selected < 0
             EmptyView()
         else
-            Show(selected, content)
+            Show(selected, content, false)
         endif
     catch
         Error(v:exception)
@@ -290,7 +287,9 @@ export def Open(args: list<string>, commit = false)
         elseif !commit && len(args) != 0 && len(args) != 2
             throw '[diffview] Usage: DiffviewOpen [left right]'
         endif
+        tree.Check()
         var model = git.Comparison(git.Root(), args, commit)
+        var candidate = tree.Build(model)
         var content = empty(model.entries) ? {} : git.Read(model, model.entries[0])
         var origin = empty(view) ? win_getid() : view.origin
         previous = view
@@ -298,12 +297,16 @@ export def Open(args: list<string>, commit = false)
         creating = true
         serial += 1
         view = {token: serial, origin: origin, model: model, buffers: [], windows: [],
-            selected: -1, rows: {}, timer: -1}
+            selected: -1, tree: candidate, timer: -1}
         tabnew
         add(view.windows, win_getid())
         Buffer('panel')
         nnoremap <silent> <buffer> <CR> <ScriptCmd>Select()<CR>
         nnoremap <silent> <buffer> o <ScriptCmd>Select()<CR>
+        nnoremap <silent> <buffer> p <ScriptCmd>Navigate('p')<CR>
+        nnoremap <silent> <buffer> x <ScriptCmd>Navigate('x')<CR>
+        nnoremap <silent> <buffer> O <ScriptCmd>Navigate('O')<CR>
+        nnoremap <silent> <buffer> X <ScriptCmd>Navigate('X')<CR>
         rightbelow vnew
         add(view.windows, win_getid())
         Buffer('left')
@@ -312,7 +315,7 @@ export def Open(args: list<string>, commit = false)
         Buffer('right')
         win_execute(view.windows[0], 'vertical resize 36')
         win_execute(view.windows[0], 'setlocal winfixwidth')
-        Panel()
+        tree.Install(view.windows[0], candidate)
         if !empty(model.entries)
             Show(0, content)
         else

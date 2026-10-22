@@ -8,6 +8,9 @@ import subprocess
 import tempfile
 
 PLUGIN = Path(__file__).resolve().parents[1]
+NERDTREE = Path(os.environ.get("NERDTREE_RUNTIME", ""))
+if not (NERDTREE / "plugin/NERD_tree.vim").is_file():
+    raise SystemExit("Set NERDTREE_RUNTIME to a real preservim/nerdtree checkout (see README.md).")
 TEST_ENV = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 TEST_ENV.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")
 
@@ -24,8 +27,23 @@ def git(repo, *args):
 def vim(repo, script, directory):
     source = directory / "check.vim"
     (directory / "vim.log").unlink(missing_ok=True)
-    source.write_text("set nomore\nset rtp^=" + str(PLUGIN) + "\n"
-                      "runtime plugin/main.vim\n" + script + "\n"
+    source.write_text("set nomore\nlet &rtp = " + quote(str(NERDTREE) + "," + str(PLUGIN))
+                      + " . ',' . &rtp\nlet g:NERDTreeHijackNetrw = 0\n"
+                      "runtime plugin/NERD_tree.vim\nruntime plugin/main.vim\n"
+                      + r'''
+function! DiffviewNodes(node)
+  let nodes = [a:node]
+  for child in get(a:node, 'children', [])
+    call extend(nodes, DiffviewNodes(child))
+  endfor
+  return nodes
+endfunction
+function! DiffviewEntries()
+  let panel = filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, 'diffview_role', '') == 'panel'})[0].bufnr
+  let tree = getbufvar(panel, 'NERDTree')
+  return filter(DiffviewNodes(tree.root), {_, n -> has_key(n, 'diffview_entry')})
+endfunction
+''' + script + "\n"
                       "if !empty(v:errors)\n  call writefile(v:errors, "
                       + quote(directory / "failures") + ")\n  cquit\nendif\nqa!\n")
     result = subprocess.run(["vim", "-Nu", "NONE", "-i", "NONE", "-n", "-es",
@@ -74,13 +92,23 @@ let userbuf = bufnr()
 let origin = win_getid()
 diffthis
 let options = [&l:diff, &l:foldmethod, &l:scrollbind, &l:wrap]
+call setreg('=', '40 + 2')
+let expression = getreginfo('=')
 DiffviewOpen
+call assert_equal(expression, getreginfo('='), 'native renderer preserves expression register')
+call assert_equal('nerdtree', &filetype)
+call assert_true(g:NERDTreeFileNode.GetSelected() is b:NERDTree.diffview_entries[0])
 call assert_equal(2, tabpagenr('$'))
 call assert_equal(3, winnr('$'))
 call assert_equal('panel', b:diffview_role)
 let pane_buffers = [Role('panel'), Role('left'), Role('right')]
-let files = filter(getbufline(Role('panel'), 1, '$'), {_, l -> l =~ '^  '})
+let files = DiffviewEntries()
 call assert_equal(17, len(files))
+let header = getline(1, 2)
+call g:NERDTreeRender()
+call assert_equal(header, getline(1, 2), 'native rerender preserves comparison headers')
+call assert_equal(expression, getreginfo('='))
+call assert_true(g:NERDTreeFileNode.GetSelected() is b:NERDTree.diffview_entries[0])
 call Sides(['HEAD'], ['INDEX'], 'Staged')
 normal o
 call feedkeys("\<CR>", 'xt')
@@ -217,7 +245,7 @@ function! Role(role)
   return filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, 'diffview_role', '') == a:role})[0].bufnr
 endfunction
 DiffviewOpen
-let entry_count = len(filter(getline(1, '$'), {_, l -> l =~ '^  '}))
+let entry_count = len(DiffviewEntries())
 call assert_equal(len(expected), entry_count)
 let seen = []
 for i in range(entry_count)
@@ -391,6 +419,13 @@ tabnew
 DiffviewRefresh
 call assert_equal(['No changes'], getbufline(winbufnr(right), 1, '$'))
 call assert_match('No changes', Label(right), 'B04: empty-view label refreshes across tabs')
+call writefile(['BACK'], 'file.txt')
+DiffviewRefresh
+let panel = getbufinfo(Role('panel'))[0].windows[0]
+let focus = win_getid()
+call win_gotoid(panel)
+call assert_equal('file.txt', get(get(g:NERDTreeFileNode.GetSelected(), 'diffview_entry', {}), 'path', ''), 'empty-to-changed refresh reveals the first entry')
+call win_gotoid(focus)
 tabclose
 DiffviewClose
 ''', directory)
@@ -452,7 +487,7 @@ function! Role(role)
   return filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, 'diffview_role', '') == a:role})[0].bufnr
 endfunction
 function! Check(path, left, right)
-  let entry_count = len(filter(getbufline(Role('panel'), 1, '$'), {_, l -> l =~ '^  '}))
+  let entry_count = len(DiffviewEntries())
   for i in range(entry_count)
     if getbufvar(Role('right'), 'diffview_path') == a:path
       break
@@ -474,7 +509,7 @@ endfunction
 let origin = win_getid()
 for command in ['DiffviewOpen left right', 'DiffviewCommit right', 'DiffviewCommit annotated']
   execute command
-  let entry_count = len(filter(getbufline(Role('panel'), 1, '$'), {_, l -> l =~ '^  '}))
+  let entry_count = len(DiffviewEntries())
   for i in range(entry_count)
     if getbufvar(Role('right'), 'diffview_path') == 'forced.txt'
       break
@@ -486,6 +521,42 @@ for command in ['DiffviewOpen left right', 'DiffviewCommit right', 'DiffviewComm
   call assert_match('Binary', getbufline(Role('left'), 1)[0], command)
 endfor
 DiffviewOpen left right
+call Check('tree dir/nested', ['root nested'], ['second nested'])
+let tree = b:NERDTree
+let directory_node = filter(DiffviewEntries(), {_, n -> n.diffview_entry.path == 'tree dir/nested'})[0].parent
+call cursor(tree.ui.getLineNum(directory_node), 1)
+normal o
+call assert_equal(0, directory_node.isOpen)
+DiffviewRefresh
+let directory_node = filter(DiffviewEntries(), {_, n -> n.diffview_entry.path == 'tree dir/nested'})[0].parent
+call assert_equal(0, directory_node.isOpen, 'refresh keeps collapsed virtual directory')
+normal o
+call assert_equal(1, directory_node.isOpen)
+let tree = b:NERDTree
+let body = getline(1, '$')
+let snapshot = getbufline(Role('right'), 1, '$')
+let expression = getreginfo('=')
+let Renderer = get(g:NERDTreeUI, 'render')
+function! PartialTreeFailure() dict
+  setlocal noreadonly modifiable
+  call setline(1, 'partial renderer output')
+  throw 'forced partial tree renderer failure'
+endfunction
+try
+  let g:NERDTreeUI.render = function('PartialTreeFailure')
+  DiffviewRefresh
+  call assert_true(b:NERDTree is tree, 'failed refresh preserves exact tree object')
+  call assert_equal(body, getline(1, '$'), 'partial tree output rolled back')
+  call assert_equal(snapshot, getbufline(Role('right'), 1, '$'))
+  call assert_equal(expression, getreginfo('='))
+  call assert_true(&readonly && !&modifiable)
+  let tabs = tabpagenr('$')
+  DiffviewOpen left right
+  call assert_equal(tabs, tabpagenr('$'), 'failed open removes candidate resources')
+  call assert_true(b:NERDTree is tree)
+finally
+  let g:NERDTreeUI.render = Renderer
+endtry
 call Check('file.txt', ['root'], ['second'])
 call assert_match(right_tree[0:6], getbufvar(Role('right'), 'diffview_source'))
 call Check('added', [''], ['added'])
@@ -536,7 +607,7 @@ call Check('file.txt', ['root'], ['second'])
 DiffviewCommit annotated
 call Check('file.txt', [''], ['root'])
 DiffviewCommit
-call assert_equal(1, len(filter(getbufline(Role('panel'), 1, '$'), {_, l -> l =~ '^  '})))
+call assert_equal(1, len(DiffviewEntries()))
 call Check('side file', [''], ['side'])
 DiffBranch left
 call Check('file.txt', ['root'], ['main'])

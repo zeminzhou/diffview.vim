@@ -6,11 +6,18 @@ Original copyright (C) 2022 zeminzhou <zeminzhou_@outlook.com>.
 Requires Vim 9.1 with +vim9script, +diff, +windows, +job and +timers,
 and Git on PATH. Verified: macOS, Vim 9.1.1950, Git 2.54.0. No earlier
 minimum patch level is verified. Neovim/older Vim are unsupported.
-Install as a standard Vim plugin/package; no other runtime dependencies.
+Install as a standard Vim plugin/package together with preservim/nerdtree
+(formerly scrooloose/nerdtree). Missing or incompatible NERDTree reports an
+installation error without replacing an existing usable view. No auto-download.
+Verified NERDTree API: 690d061b591525890f1471c6675bcb5bdc8cdff9.
+The adapter uses real nodes, UI renderer and FlagSet with instance-local virtual
+paths and row lookup; it does not change global NERDTree options or prototypes.
+Other upstream revisions remain unverified. See README.md for a pinned checkout
+and NERDTREE_RUNTIME setup for developer checks.
 
                                                        *:DiffviewOpen*
 :DiffviewOpen
-    Open one dedicated tab with a file panel and two read-only diff panes.
+    Open one dedicated tab with a NERDTree and two read-only diff panes.
     Locate Git from the current working directory, including subdirectories.
     Do not change cwd. Bare repositories are unsupported. There is at most
     one active view; another valid open replaces it.
@@ -22,7 +29,13 @@ Install as a standard Vim plugin/package; no other runtime dependencies.
 
     A path with both staged/unstaged edits has two entries. Ignored files
     are excluded. The first file is selected and the panel receives focus.
-    Source/path labels are in each content pane's status line.
+    Source/path labels are in each content pane's status line. The tree shows
+    only changed paths and parent directories, with all directories expanded
+    initially. Native flags identify file changes and descendant statuses.
+    Deleted/historical paths require no filesystem placeholders. Duplicate
+    staged/unstaged paths and file/directory replacements stay separate nodes.
+    Renames show the old path beside the new filename. Escaped labels never
+    supply the raw path used for selection.
 
     All displayed buffers belong to the plugin and are read-only. Disk
     snapshots exclude unsaved Vim buffer contents. Browsing never saves,
@@ -64,7 +77,8 @@ Install as a standard Vim plugin/package; no other runtime dependencies.
 :DiffviewRefresh
     Explicitly re-read the original repository, regardless of later cwd
     changes. Retain selected section/path when it still exists. There is
-    no automatic refresh. Git/read errors retain the previous comparison.
+    no automatic refresh. Surviving directory expansion state is retained.
+    Git/read/NERDTree renderer errors retain the previous comparison.
 
                                                        *:DiffviewClose*
 :DiffviewClose
@@ -75,11 +89,20 @@ Install as a standard Vim plugin/package; no other runtime dependencies.
     its content/layout before replacing the previous usable view.
 
                                                        *diffview-keys*
-    File panel: j/k navigate; <CR> or o shows the file and retains panel focus.
-    All panes:  ]f/[f next/previous file (wrap); <Tab>/<S-Tab> cycle panes;
+    Tree:       j/k navigate; <CR> or o selects a file or toggles a directory;
+                p selects parent; O recursively expands; X closes descendant
+                directories; x closes directory (or selected file's parent).
+                Selection retains tree focus.
+    All panes:  ]f/[f next/previous file (wrap, revealing ancestors);
+                <Tab>/<S-Tab> cycle panes;
                 r refresh; q close.
     Diff panes: ]c/[c use Vim's standard diff hunk navigation.
-    All plugin mappings are buffer-local. Section headings are not files.
+    All plugin mappings are buffer-local. Sections are virtual directories.
+    Filesystem mutation, ordinary file-opening, bookmarks and root/cwd-changing
+    NERDTree mappings are not installed. Other NERDTree instances are untouched.
+    Directory navigation and rendering run no per-node Git commands.
+    nerdtree-git-plugin is optional; flags use the comparison model rather than
+    its local status cache, so all three comparison modes remain accurate.
     Narrow panes can clip notices and source/path labels. Use Vim's window
     resizing commands to widen the focused pane.
 
@@ -116,11 +139,8 @@ Install as a standard Vim plugin/package; no other runtime dependencies.
     A file disappearing unexpectedly is a read error, not an empty file.
     Errors are prefixed [diffview]; non-Git/bare cwd creates no partial view.
 
-    Git runs synchronously and large inputs can block Vim. One headless macOS
-    probe on Vim 9.1.1950/Git 2.54.0, with 1,001 modified files and a selected
-    1,000,008-byte file, took about 0.21 s to open and 0.19 s to refresh. This
-    single measurement does not bound other sizes/repos. Real-terminal layout
-    and focus checks are not claimed by the developer's headless checks.
+    Git runs synchronously and large inputs can block Vim. Other versions,
+    platforms and unusually large workloads remain unverified.
     Windows support, Git mutations (stage/restore/checkout), history browsing,
     editable panes, automatic refresh and three-way merges are not provided.
 
