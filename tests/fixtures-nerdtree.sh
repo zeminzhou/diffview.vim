@@ -14,9 +14,11 @@ printf 'HEAD hidden\n' > "$tree_repo/.hidden/change.txt"
 tree_tab=$(printf 'tab\tname.txt')
 tree_newline=$(printf 'line\nname.txt')
 tree_soh=$(printf 'ctrl\001name.txt')
+tree_bel=$(printf 'bell\007name.txt')
 tree_paths() {
     counter=0
-    for path in "$tree_tab" "$tree_newline" "$tree_soh" 'line^@name.txt' 'literal\n.txt' ':(glob)**'; do
+    for path in "$tree_tab" "$tree_newline" "$tree_soh" 'line^@name.txt' 'literal\n.txt' ':(glob)**' \
+        "$tree_bel" 'bell^Gname.txt'; do
         counter=$((counter + 1))
         printf '%s identity %s\n' "$1" "$counter" > "$tree_repo/weird/$path"
     done

@@ -888,6 +888,31 @@ def Large()
     close_seconds: reltimefloat(reltime(started))})], test_tmp .. '/large.metrics.json')
 enddef
 
+def EmptyStart()
+  assert_equal(1, len(getbufinfo()), 'fresh Vim has only its unnamed buffer')
+  assert_equal('', bufname(), 'no file was edited before DiffviewOpen')
+  assert_true(bufnr('#') <= 0, 'fresh Vim has no alternate buffer')
+  assert_equal([''], getline(1, '$'))
+  assert_false(&modified)
+  var origin = win_getid()
+  var buffers = getbufinfo()->mapnew((_, b) => b.bufnr)
+  execute 'cd ' .. fnameescape(test_tmp .. '/tree repo')
+  v:errmsg = ''
+  DiffviewOpen
+  assert_equal('', v:errmsg, 'direct empty-session open must not trigger Creator E194')
+  assert_equal(Panel(), win_getid(), 'direct open focuses the real tree')
+  Select('Staged', 'src/deep/both.txt')
+  Pair(['HEAD nested'], ['INDEX nested'])
+  DiffviewRefresh
+  Pair(['HEAD nested'], ['INDEX nested'])
+  DiffviewClose
+  assert_equal(origin, win_getid())
+  assert_equal(buffers, getbufinfo()->mapnew((_, b) => b.bufnr), 'empty-session open leaves no tree/snapshot buffers')
+  assert_equal('', bufname())
+  assert_equal([''], getline(1, '$'))
+  assert_false(&modified)
+enddef
+
 def TreeNodes()
   execute 'cd ' .. fnameescape(test_tmp .. '/tree repo')
   DiffviewOpen
@@ -936,7 +961,9 @@ def TreeNodes()
   assert_equal('old dir/old.txt', getbufvar(Role('left').bufnr, 'diffview_path'))
 
   var names = ["tab\tname.txt", "line\nname.txt", "ctrl\x01name.txt",
-    'line^@name.txt', 'literal\n.txt', ':(glob)**']
+    'line^@name.txt', 'literal\n.txt', ':(glob)**', "bell\x07name.txt", 'bell^Gname.txt']
+  assert_equal(strtrans(names[1]), strtrans(names[3]), 'fixture includes colliding newline display text')
+  assert_equal(strtrans(names[6]), strtrans(names[7]), 'fixture includes colliding NERDTree delimiter display text')
   for i in range(len(names))
     for section in ['Staged', 'Unstaged']
       Select(section, 'weird/' .. names[i])
@@ -978,6 +1005,10 @@ def TreeNodes()
     'refresh retains surviving unrelated directory collapse')
   assert_true(Node('Unstaged', 'src/deep/change.txt').parent.isOpen)
   Pair(['HEAD change'], ['DISK change'])
+  Select('Staged', 'src/deep/both.txt')
+  Pair(['HEAD nested'], ['INDEX nested'])
+  Select('Unstaged', 'src/deep/both.txt')
+  Pair(['INDEX nested'], ['DISK nested'])
   for key in ['m', 'i', 's', 't', 'T', 'C', 'cd', 'CD', 'u', 'U', 'B', 'D', 'gb']
     assert_false(get(maparg(key, 'n', false, true), 'rhs', '') =~ 'nerdtree#ui_glue#invokeKeyMap',
       'comparison tree has no native filesystem/open/root action: ' .. key)
@@ -1006,6 +1037,8 @@ def TreeHistory()
     DiffviewRefresh
     Pair(['LEFT subtree'], ['RIGHT subtree'])
     assert_equal(6, len(Entries()), 'refresh retains virtual and collision entries')
+    Select('', 'deleted/deep/only.txt')
+    Pair(['LEFT historical only'], [''])
     DiffviewClose
   endfor
   execute 'DiffviewOpen nt-left:sub\ tree nt-right:sub\ tree'
@@ -1286,6 +1319,8 @@ try
     BinaryMixed()
   elseif case_name == 'large'
     Large()
+  elseif case_name == 'empty_start'
+    EmptyStart()
   elseif case_name == 'tree_nodes'
     TreeNodes()
   elseif case_name == 'tree_history'

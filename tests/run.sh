@@ -179,7 +179,7 @@ export PATH="$test_tmp/git-bin:$PATH"
 suite_failed=0
 test_cases='local clean unborn nonrepo special refresh lifecycle ownership ancestor
     trees commits historical_refresh errors exclusions edges cross_tab read_failure navigation
-    binary_clean binary_mixed large tree_nodes tree_history tree_isolation dependency tree_rollback'
+    binary_clean binary_mixed large empty_start tree_nodes tree_history tree_isolation dependency tree_rollback'
 if [ -n "${NERDTREE_GIT_RUNTIME:-}" ]; then
     test_cases="$test_cases tree_git"
 else

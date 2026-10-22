@@ -47,6 +47,7 @@ vim -Nu NONE -U NONE -i NONE -n \
 
 | Step | Expected |
 | --- | --- |
+| In a fresh Vim with an empty unnamed buffer and no alternate file, run DiffviewOpen directly | The real tree opens without E194, preparatory edits or an extra Enter prompt |
 | Edit file.txt, append an unsaved line, create a split, then DiffviewOpen | One dedicated three-pane tab; real NERDTree focused without extra Enter; readable section/source/path labels and unsaved exclusion notice; original tab/split retained |
 | j/k over sections/directories/files, Enter and o | Directories toggle; files retain tree focus; staged HEAD→INDEX differs from unstaged INDEX→disk; unsaved text absent; node flags and descendant indicators are visible |
 | Collapse a directory, then ]f/[f; Tab/Shift-Tab | Next/previous reveal nodes by expanding ancestors; wrapping and pane focus work; left/right direction stays correct |
