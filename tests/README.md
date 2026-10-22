@@ -105,6 +105,16 @@ Additional scenarios:
 | tree_rollback | FileType failure plus native mid-render throws during new Open and changed-model Refresh preserve tree/node/row identities, bodies/sources, readonly/options, focus, registers, buffers/windows/timers/autocommands and the original dirty buffer |
 | tree_git | Optional real nerdtree-git-plugin coexistence: local status callbacks and flags remain isolated from staged/history diff flags and user trees |
 
+The coexistence case drains jobs and channel-close callbacks after native tree
+creation, mirroring and buffer entry before recording its baseline. It then
+declares a temporary disk change and explicitly triggers the ordinary tree's
+status update. That external actor may update its own markers and `=` register;
+comparison markers/content and the ordinary tree's structure must stay intact.
+After restoring the disk edit and settling callbacks, subsequent Diffview
+operations must preserve the new ordinary-tree baseline and a reseeded safe
+expression. The plain isolation case retains strict unchanged-register/flag
+checks throughout, without an external actor.
+
 Raw-identity fixtures include newline and BEL filenames alongside their literal
 `^@`/`^G` display twins. Selection must distinguish them before and after tree
 operations, including NERDTree's own control-byte delimiter. Historical ghosts

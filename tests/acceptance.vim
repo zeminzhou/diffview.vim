@@ -1124,12 +1124,17 @@ enddef
 
 def WaitForJobs()
   var started = reltime()
-  while !empty(job_info()->filter((_, job) => job_status(job) == 'run'))
-      && reltimefloat(reltime(started)) < 2.0
+  var idle_ticks = 0
+  while reltimefloat(reltime(started)) < 2.0
+    var pending = job_info()->filter((_, job) => job_status(job) == 'run'
+      || index(['open', 'buffered'], ch_status(job_getchannel(job))) >= 0)
+    idle_ticks = empty(pending) ? idle_ticks + 1 : 0
+    if idle_ticks >= 2
+      return
+    endif
     sleep 10m
   endwhile
-  sleep 10m
-  assert_equal([], job_info()->filter((_, job) => job_status(job) == 'run'), 'dependency jobs finish within 2 seconds')
+  assert_true(false, 'dependency jobs and close callbacks finish within 2 seconds')
 enddef
 
 def TreeIsolation()
@@ -1153,7 +1158,9 @@ def TreeIsolation()
   execute 'NERDTreeMirror'
   assert_equal(treebuf, bufnr(), 'fixture mirrors the same ordinary NERDTree buffer')
   var mirror = win_getid()
+  WaitForJobs()
   win_gotoid(treewin)
+  WaitForJobs()
   var original = UserTreeState(treebuf, treewin)
   var globals = NerdGlobals()
   var autocmds = execute('autocmd')
@@ -1170,11 +1177,14 @@ def TreeIsolation()
   Select('Staged', 'src/deep/both.txt')
   Pair(['HEAD nested'], ['INDEX nested'])
   if case_name == 'tree_git'
+    assert_equal(original, UserTreeState(treebuf, treewin), 'Open preserves the settled user tree before external events')
+    assert_equal(registers, RegisterState())
+    var comparison_win = Role('panel').winid
     var flags = Entries()->mapnew((_, node) => node.path.flagSet.renderToString())
     var calls = getfsize($DIFFVIEW_TEST_GIT_LOG)
     var userwin = getwininfo()->filter((_, w) => w.bufnr == userbuf)[0].winid
     try
-      writefile(['temporary coexistence event'], test_tmp .. '/user-tree/transient-untracked.txt')
+      writefile(['temporary coexistence event'], test_tmp .. '/user-tree/open/closed/deep.txt')
       win_execute(userwin, 'doautocmd CursorHold')
       win_gotoid(Panel())
       WaitForJobs()
@@ -1183,11 +1193,31 @@ def TreeIsolation()
         'asynchronous worktree status cannot replace comparison node flags')
       Pair(['HEAD nested'], ['INDEX nested'])
     finally
-      delete(test_tmp .. '/user-tree/transient-untracked.txt')
+      writefile(['USER deep file'], test_tmp .. '/user-tree/open/closed/deep.txt')
       win_execute(userwin, 'doautocmd CursorHold')
       win_gotoid(Panel())
       WaitForJobs()
     endtry
+    # Let the ordinary tree apply its own status update before the next baseline.
+    win_gotoid(treewin)
+    WaitForJobs()
+    var updated = UserTreeState(treebuf, treewin)
+    for key in ['root', 'cursor', 'options', 'statusline']
+      assert_equal(original[key], updated[key], 'external status preserves user-tree structure: ' .. key)
+    endfor
+    assert_equal(original.nodes->mapnew((_, node) => node[0 : 1]),
+      updated.nodes->mapnew((_, node) => node[0 : 1]), 'external status keeps paths and expansion state')
+    var after_event = RegisterState()
+    for name in user_registers->copy()->filter((_, reg) => reg != '=')
+      assert_equal(registers[name], after_event[name], 'ordinary status render preserves register ' .. name)
+    endfor
+    original = updated
+    setreg('=', '6 * 7')
+    registers = RegisterState()
+    win_gotoid(comparison_win)
+    assert_equal(flags, Entries()->mapnew((_, node) => node.path.flagSet.renderToString()),
+      'ordinary tree updates remain separate from comparison flags')
+    Pair(['HEAD nested'], ['INDEX nested'])
   endif
   Reject('DiffviewOpen missing-tree-revision HEAD')
   Pair(['HEAD nested'], ['INDEX nested'])
