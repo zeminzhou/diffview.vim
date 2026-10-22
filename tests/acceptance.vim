@@ -1122,7 +1122,7 @@ def TreeIsolation()
   usertree.root.path.flagSet.addFlag('fixture', 'USER')
   g:NERDTreeRender()
   tabnew
-  NERDTreeMirror
+  execute 'NERDTreeMirror'
   assert_equal(treebuf, bufnr(), 'fixture mirrors the same ordinary NERDTree buffer')
   var mirror = win_getid()
   win_gotoid(treewin)
