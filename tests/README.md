@@ -110,7 +110,9 @@ Raw-identity fixtures include newline and BEL filenames alongside their literal
 operations, including NERDTree's own control-byte delimiter. Historical ghosts
 and the same staged/unstaged path are explicitly selected again after refresh.
 Register snapshots read the raw `=` expression without evaluating it and include
-types for the unnamed, numbered, named, small-delete and search registers. Render
+the complete `getreginfo()` for the unnamed, numbered, named, small-delete and
+search registers, including unnamed-register identity. Open, Toggle in both
+directions, Refresh, Close and render failures must preserve these snapshots. Render
 faults are injected into `root.renderToString`, after native UI.render has begun
 clearing/unlocking its buffer. The refresh test declares and restores its temporary
 content/addition edits; whole-fixture comparisons still require original bytes.

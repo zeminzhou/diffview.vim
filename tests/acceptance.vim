@@ -7,8 +7,8 @@ const user_registers = ['"', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '
 def RegisterState(): dict<any>
   var registers: dict<any> = {}
   for name in user_registers
-    # Read the expression itself; evaluating = could hide a changed expression.
-    registers[name] = [getreg(name, 1, true), getregtype(name)]
+    # getreginfo preserves the raw expression and unnamed-register identity.
+    registers[name] = getreginfo(name)
   endfor
   return registers
 enddef
@@ -1137,6 +1137,7 @@ def TreeIsolation()
   execute 'cd ' .. fnameescape(test_tmp .. '/tree repo')
   var request_cwd = getcwd()
   DiffviewOpen
+  assert_equal(registers, RegisterState(), 'Open preserves raw register information')
   assert_true(getbufvar(winbufnr(Panel()), 'NERDTree') isnot usertree, 'comparison owns a separate tree instance')
   Select('Staged', 'src/deep/both.txt')
   Pair(['HEAD nested'], ['INDEX nested'])
@@ -1163,8 +1164,10 @@ def TreeIsolation()
   Reject('DiffviewOpen missing-tree-revision HEAD')
   Pair(['HEAD nested'], ['INDEX nested'])
   DiffviewRefresh
+  assert_equal(registers, RegisterState(), 'Refresh preserves raw register information')
   Pair(['HEAD nested'], ['INDEX nested'])
   DiffviewClose
+  assert_equal(registers, RegisterState(), 'Close preserves raw register information')
   assert_equal(request_cwd, getcwd(), 'comparison never changes cwd')
   assert_equal(tabs, tabpagenr('$'))
   assert_true(win_id2tabwin(mirror)[0] > 0, 'mirrored user tree window survives')
@@ -1179,6 +1182,13 @@ def TreeIsolation()
   assert_equal(['UNSAVED ordinary user buffer'], getbufline(userbuf, 1, '$'))
   assert_true(getbufvar(userbuf, '&modified'))
   assert_equal(['USER tree disk change'], readfile(test_tmp .. '/user-tree/open/file.txt'))
+
+  call g:ToggleDiffView()
+  assert_equal(registers, RegisterState(), 'Toggle opening preserves raw register information')
+  Panel()
+  call g:ToggleDiffView()
+  assert_equal(registers, RegisterState(), 'Toggle closing preserves raw register information')
+  assert_equal(original, UserTreeState(treebuf, treewin), 'Toggle preserves the independent tree')
 
   DiffviewOpen
   win_execute(Role('left').winid, 'close')
