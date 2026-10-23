@@ -114,7 +114,7 @@ Additional scenarios:
 | tree_git | Optional real nerdtree-git-plugin coexistence: local status callbacks and flags remain isolated from staged/history diff flags and user trees |
 | picker_real | Real core/binary filtered selection by subject, author and short hash; reachable side history, root/merge semantics, metadata punctuation, fixed full-OID refresh and dirty-buffer protection |
 | picker_no_match | Real core/binary no match preserves caller focus, old comparison, registers, dirty buffer and an ordinary NERDTree |
-| picker_enew | Real in-place core layout with nohidden/autowriteall: selection, no match and initialization failure preserve dirty bytes/modified state, options and the old usable view |
+| picker_enew | Real in-place core layout with nohidden/autowrite/autowriteall: observed caller-window reuse, selection, no match, binary-generated abort and initialization failure preserve dirty bytes/modified state, options and the old usable view |
 | picker_sha256 | Real core/binary selection and refresh retain the full 64-character commit identity and actual bodies |
 | picker_missing | Missing core plugin/binary give errors and preserve the comparison; explicit HEAD works with neither dependency |
 | picker_old_binary | Unmodified real core with an incompatible version-reporting binary fixture rejects without consuming input or running an installer/picker; explicit HEAD remains usable |

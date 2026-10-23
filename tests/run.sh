@@ -244,6 +244,9 @@ for test_case in $test_cases; do
         if [ "$test_case" = picker_real ]; then
             cat "$test_tmp/picker-real.facts.json"
         fi
+        if [ "$test_case" = picker_enew ]; then
+            cat "$test_tmp/picker-enew.facts.json"
+        fi
     else
         cat "$test_tmp/$test_case.errors" "$test_tmp/$test_case.stdout" 2>/dev/null || true
         suite_failed=1

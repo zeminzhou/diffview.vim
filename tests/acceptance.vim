@@ -1525,8 +1525,9 @@ def PickerEnew()
   execute 'cd ' .. fnameescape(test_tmp .. '/picker repo 中文')
   edit change.txt
   setline(1, ['UNSAVED enew picker user'])
-  set nohidden noautowrite autowriteall
+  set nohidden autowrite autowriteall
   var userbuf = bufnr()
+  var dirty_before = &modified
   var origin = win_getid()
   var disk = readfile('change.txt', 'b')
   var options = [&hidden, &autowrite, &autowriteall]
@@ -1534,31 +1535,65 @@ def PickerEnew()
   Select('', 'change.txt')
   win_gotoid(origin)
   SeedRegisters()
+  g:diffview_test_picker_windows = []
+  augroup DiffviewPickerObservation
+    autocmd FileType fzf call add(g:diffview_test_picker_windows, win_getid())
+  augroup END
   var state = ComparisonState()
   g:fzf_layout = {window: 'enew'}
+  assert_equal(userbuf, bufnr(), 'real in-place picker starts in the dirty user buffer')
+  assert_true(&modified)
   PickerFilter('NO_COMMIT_MATCH_0f962372')
+  assert_equal([origin], g:diffview_test_picker_windows, 'real fzf terminal reused caller window')
   assert_equal(state, ComparisonState(), 'in-place no match restores caller and old view')
+  assert_equal(userbuf, bufnr())
+  assert_equal({window: 'enew'}, g:fzf_layout)
   assert_equal(options, [&hidden, &autowrite, &autowriteall])
   assert_equal(disk, readfile('change.txt', 'b'), 'in-place picker never autosaves dirty caller')
   assert_equal(['UNSAVED enew picker user'], getbufline(userbuf, 1, '$'))
   assert_true(getbufvar(userbuf, '&modified'))
   PickerFilter('PICK_OLDER')
+  assert_equal([origin, origin], g:diffview_test_picker_windows, 'selection used the requested enew layout')
   Select('', 'change.txt')
   Pair(['PICK ROOT'], ['PICK OLDER'])
   assert_equal(options, [&hidden, &autowrite, &autowriteall])
   assert_equal(disk, readfile('change.txt', 'b'))
   assert_true(getbufvar(userbuf, '&modified'))
   win_gotoid(origin)
+  assert_equal(userbuf, bufnr())
   state = ComparisonState()
+  # Binary-generated abort covers the real exit path; physical keys remain a PTY gate.
+  $FZF_DEFAULT_OPTS = '--bind=start:abort'
+  DiffviewCommit
+  WaitPicker()
+  assert_equal([origin, origin, origin], g:diffview_test_picker_windows, 'abort used the requested enew layout')
+  assert_equal(state, ComparisonState(), 'real binary abort restores caller and old view')
+  assert_equal(userbuf, bufnr())
+  assert_equal(options, [&hidden, &autowrite, &autowriteall])
+  assert_equal({window: 'enew'}, g:fzf_layout)
+  assert_equal(disk, readfile('change.txt', 'b'))
+  assert_equal(['UNSAVED enew picker user'], getbufline(userbuf, 1, '$'))
+  assert_true(getbufvar(userbuf, '&modified'))
   # Real core executes this user layout before it starts its terminal job.
-  g:fzf_layout = {window: 'enew | throw "fixture picker layout failure"'}
+  g:diffview_test_layout_window = 0
+  g:fzf_layout = {window: 'enew | let g:diffview_test_layout_window = win_getid() | throw "fixture picker layout failure"'}
   Reject('DiffviewCommit')
   WaitPicker()
+  assert_equal(origin, g:diffview_test_layout_window, 'failure occurred after executing the real enew layout')
   assert_equal(state, ComparisonState(), 'real layout initialization error preserves old view and caller')
+  assert_equal(userbuf, bufnr())
   assert_equal(options, [&hidden, &autowrite, &autowriteall])
   assert_equal(disk, readfile('change.txt', 'b'))
   assert_equal(['UNSAVED enew picker user'], getbufline(userbuf, 1, '$'))
   assert_true(getbufvar(userbuf, '&modified'))
+  augroup DiffviewPickerObservation
+    autocmd!
+  augroup END
+  writefile([json_encode({scope: 'real core/binary enew; generated abort, not physical cancel keys',
+    origin: origin, terminal_windows: g:diffview_test_picker_windows,
+    initialization_window: g:diffview_test_layout_window, dirty_before: dirty_before,
+    dirty_after: getbufvar(userbuf, '&modified'), options_before: options,
+    options_after: [&hidden, &autowrite, &autowriteall]})], test_tmp .. '/picker-enew.facts.json')
   DiffviewClose
 enddef
 
