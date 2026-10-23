@@ -1,286 +1,351 @@
 vim9script
 
-#    Copyright (C) 2022  zeminzhou<zeminzhou_@outlook.com>
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as published
-#    by the Free Software Foundation, either version 3 of the License, or
-#    (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# Copyright (C) 2022 zeminzhou <zeminzhou_@outlook.com>
+# Modified 2026-10-22. Licensed under AGPL-3.0-or-later; see LICENSE.
 
-export def Initialize()
-    echom '[diffview] init'
-    augroup diffview
-        autocmd!
-        autocmd BufEnter * diffview.CloseIf()
-        autocmd WinClosed * diffview.OnWinClosed()
-        autocmd BufWinEnter * diffview.OnBufWinEnter()
-        autocmd BufWritePost * diffview.UpdateModifiedFile()
-    augroup END
-    diffview.Initialize("current")
+import autoload 'diffview/git.vim' as git
+import autoload 'diffview/tree.vim' as tree
+
+var view: dict<any> = {}
+var serial = 0
+
+def Error(message: string)
+    echohl ErrorMsg
+    echomsg message =~ '^\[diffview\]' ? message : '[diffview] ' .. message
+    echohl None
 enddef
 
-export def DiffBranch(branch0: string)
-    echom '[diffview] diffbranch init'
-    augroup diffbranch
-        autocmd!
-        autocmd BufEnter * diffview.CloseIf()
-        autocmd WinClosed * diffview.OnWinClosed()
-        autocmd BufWinEnter * diffview.OnBufWinEnter()
-        autocmd BufWritePost * diffbranch.UpdateModifiedFile()
-    augroup END
-    diffbranch.Initialize(branch0)
+def OwnedWindow(id: number): bool
+    return !empty(getwininfo(id)) && index(view.buffers, winbufnr(id)) >= 0
 enddef
 
-def DiffBranchEnd()
-    echom '[diffview] diffbranch close'
-    augroup diffbranch
-        autocmd!
-    augroup END
-enddef
-
-export def Deinitialize()
-    echom '[diffview] close'
-    augroup diffview
-        autocmd!
-    augroup END
-    diffview.Close()
-enddef
-
-def FocusOn(bufname: string): number
-    var winnr = bufwinnr(bufname)
-    if winnr == winnr() || winnr == -1
-        return winnr
-    endif
-
-    execute("normal! " .. winnr .. "\<c-w>\<c-w>")
-    return winnr
-enddef
-
-def DisplayFiles(message: string, bufname: string)
-    var winnr = FocusOn(bufname)
-    if winnr == -1
+export def Close()
+    if empty(view)
         return
     endif
-
-    var files = split(message)
-    setlocal modifiable
-    execute("normal! gg")
-    execute("normal! dG")
-
-    var size = len(files)
-    append(0, bufname .. '(' .. size .. ')')
-    append(1, '--------------------')
-
-    for i in range(0, size - 1)
-        append(i + 2, files[i])
+    var old = view
+    view = {}
+    g:diffview_enabled = false
+    augroup DiffviewView
+        autocmd!
+    augroup END
+    if old.timer != -1
+        timer_stop(old.timer)
+    endif
+    var owned: list<number> = []
+    for id in old.windows
+        if !empty(getwininfo(id)) && index(old.buffers, winbufnr(id)) >= 0
+            win_execute(id, 'diffoff')
+            add(owned, id)
+        endif
     endfor
-
-    execute("normal! gg")
-    setlocal nomodifiable
+    if !empty(owned)
+        var tab = win_id2tabwin(owned[0])[0]
+        var tabwins = gettabinfo(tab)[0].windows
+        if len(owned) == len(tabwins) && tabpagenr('$') > 1
+            win_gotoid(owned[0])
+            tabclose
+        else
+            for id in owned
+                if !empty(getwininfo(id))
+                    win_execute(id, 'silent! close')
+                endif
+            endfor
+        endif
+    endif
+    for buf in old.buffers
+        if bufexists(buf)
+            execute 'silent! bwipeout! ' .. buf
+        endif
+    endfor
+    win_gotoid(old.origin)
 enddef
 
-var tmp_buf = ''
-
-def g:DiffCurrentFile(branch0: string)
-    CleanUpPreTmp()
-
-    if line('.') == 0 || line('.') == 1
-        return
+def CloseLater(token: number)
+    if !empty(view) && view.token == token
+        Close()
     endif
-    var filename = getline('.')
-
-    var tmp = tempname()
-    system('git show ' .. branch0 .. ':' .. filename .. ' > ' .. tmp)
-    if v:shell_error != 0
-        return
-    endif
-
-    execute("normal! \<c-w>l")
-    execute("edit " .. filename)
-    execute("vertical diffsplit " .. tmp)
-    tmp_buf = branch0 .. '://' .. filename
-    execute("file " .. tmp_buf)
 enddef
 
-def CleanUpPreTmp()
-    if tmp_buf == ''
-        return
+export def LostWindow(id: number)
+    if !empty(view) && index(view.windows, id) >= 0 && view.timer == -1
+        var token = view.token
+        view.timer = timer_start(0, (_) => CloseLater(token))
     endif
-
-    if !bufexists(tmp_buf)
-        tmp_buf = ''
-        return
-    endif
-
-    var n = bufnr(tmp_buf)
-    if n == -1
-        tmp_buf = ''
-        return
-    endif
-
-    execute('bdelete ' .. n)
-    tmp_buf = ''
 enddef
 
-class DiffView
-    var branch: string
-    var initialized: bool
-    var modifid_bufname: string
-    var staged_bufname: string
+export def LostBuffer(buf: number)
+    if !empty(view) && index(view.buffers, buf) >= 0
+        LostWindow(view.windows[0])
+    endif
+enddef
 
-    def new()
-        this.initialized = false
-        this.modifid_bufname = 'modified'
-        this.staged_bufname = 'staged'
-    enddef
+def Events()
+    augroup DiffviewView
+        autocmd!
+        autocmd WinClosed * LostWindow(str2nr(expand('<afile>')))
+        autocmd BufWipeout * LostBuffer(str2nr(expand('<abuf>')))
+    augroup END
+enddef
 
-    def Layout(layout_cmd: string, branch0: string)
-        execute('silent keepalt ' .. layout_cmd)
-        setlocal winfixwidth
-        setlocal winfixheight
-        setlocal noswapfile
-        setlocal buftype=nowrite
-        setlocal bufhidden=delete
-        setlocal nowrap
-        setlocal foldcolumn=0
-        setlocal nobuflisted
-        setlocal nospell
-        setlocal nonumber
-        setlocal norelativenumber
-        setlocal nomodifiable
-        setfiletype diffview
-        execute('nnoremap <silent> <buffer> o :call DiffCurrentFile("' .. branch0 .. '")<cr>')
-    enddef
+def Mappings()
+    nnoremap <silent> <buffer> q <ScriptCmd>Close()<CR>
+    nnoremap <silent> <buffer> r <ScriptCmd>Refresh()<CR>
+    nnoremap <silent> <buffer> ]f <ScriptCmd>Next(1)<CR>
+    nnoremap <silent> <buffer> [f <ScriptCmd>Next(-1)<CR>
+    nnoremap <silent> <buffer> <Tab> <ScriptCmd>Cycle(1)<CR>
+    nnoremap <silent> <buffer> <S-Tab> <ScriptCmd>Cycle(-1)<CR>
+enddef
 
-    def UpdateModifiedFile()
-        if !this.initialized
+def Buffer(role: string): number
+    var buf = bufnr()
+    add(view.buffers, buf)
+    execute 'silent file diffview://' .. view.token .. '/' .. role
+    setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted
+    setlocal nowrap nospell nomodifiable readonly
+    setlocal nofoldenable foldcolumn=0 nonumber norelativenumber
+    if role == 'panel'
+        setlocal filetype=nerdtree
+    else
+        setlocal filetype=diffview
+    endif
+    b:diffview_role = role
+    Mappings()
+    return buf
+enddef
+
+def Put(buf: number, lines: list<string>, eol: bool)
+    setbufvar(buf, '&readonly', false)
+    setbufvar(buf, '&modifiable', true)
+    try
+        setbufline(buf, 1, lines)
+        if len(getbufline(buf, 1, '$')) > len(lines)
+            deletebufline(buf, len(lines) + 1, '$')
+        endif
+        setbufvar(buf, '&endofline', eol)
+        setbufvar(buf, '&fixendofline', false)
+        setbufvar(buf, '&modified', false)
+    finally
+        setbufvar(buf, '&modifiable', false)
+        setbufvar(buf, '&readonly', true)
+    endtry
+enddef
+
+def Show(index: number, content: dict<any>, reveal = true)
+    if reveal
+        tree.Reveal(view.windows[0], view.tree, index)
+    endif
+    var entry = view.model.entries[index]
+    for side in [1, 2]
+        var role = side == 1 ? 'left' : 'right'
+        var path = side == 1 ? entry.oldpath : entry.path
+        var source = content[role .. 'Source']
+        var buf = view.buffers[side]
+        var win = view.windows[side]
+        Put(buf, content[role].lines, content[role].eol)
+        setbufvar(buf, 'diffview_path', path)
+        setbufvar(buf, 'diffview_section', entry.section)
+        setbufvar(buf, 'diffview_source', source)
+        var location = win_id2tabwin(win)
+        settabwinvar(location[0], location[1], '&statusline', substitute(entry.section .. ' | ' .. git.Display(source)
+            .. ' | ' .. git.Display(path), '%', '%%', 'g'))
+        win_execute(win, content.diff ? 'diffthis' : 'diffoff')
+    endfor
+    view.selected = index
+    if content.diff
+        win_execute(view.windows[1], 'diffupdate')
+    endif
+enddef
+
+def EmptyView()
+    for side in [1, 2]
+        Put(view.buffers[side], ['No changes'], true)
+        win_execute(view.windows[side], 'diffoff')
+        var location = win_id2tabwin(view.windows[side])
+        settabwinvar(location[0], location[1], '&statusline', '[diffview] No changes')
+        for name in ['path', 'section', 'source']
+            setbufvar(view.buffers[side], 'diffview_' .. name, '')
+        endfor
+    endfor
+    view.selected = -1
+enddef
+
+def Usable(): bool
+    if empty(view)
+        return false
+    endif
+    for id in view.windows
+        if !OwnedWindow(id)
+            Close()
+            return false
+        endif
+    endfor
+    return true
+enddef
+
+export def Select()
+    if !Usable()
+        return
+    endif
+    try
+        var node = g:NERDTreeFileNode.GetSelected()
+        if empty(node)
+            return
+        elseif !has_key(node, 'diffview_entry')
+            tree.Navigate(view.windows[0], view.tree, 'toggle')
             return
         endif
+        var index = node.diffview_index
+        var content = git.Read(view.model, node.diffview_entry)
+        Show(index, content)
+    catch
+        Error(v:exception)
+    endtry
+enddef
 
-        var branch0 = this.branch
-        if branch0 == "current"
-            branch0 = ""
-        endif
-        var output = trim(system('git diff ' .. branch0 .. ' --name-only'))
-        if v:shell_error != 0
-            return
-        endif
-        DisplayFiles(output, "modified")
-    enddef
+export def Navigate(action: string)
+    if !Usable()
+        return
+    endif
+    try
+        tree.Navigate(view.windows[0], view.tree, action)
+    catch
+        Error(v:exception)
+    endtry
+enddef
 
-    def UpdateStagedFile()
-        if !this.initialized
-            return
-        endif
+export def Next(delta: number)
+    if !Usable() || empty(view.model.entries)
+        return
+    endif
+    var count = len(view.model.entries)
+    var index = (view.selected + delta + count) % count
+    try
+        var content = git.Read(view.model, view.model.entries[index])
+        Show(index, content)
+    catch
+        Error(v:exception)
+    endtry
+enddef
 
-        var output = trim(system('git diff --cached --name-only'))
-        if v:shell_error != 0
-            return
-        endif
-        DisplayFiles(output, "staged")
-    enddef
+export def Cycle(delta: number)
+    if !Usable()
+        return
+    endif
+    var index = index(view.windows, win_getid())
+    win_gotoid(view.windows[(index + delta + 3) % 3])
+enddef
 
-    def Initialize(branch0: string)
-        if this.initialized
-            return
+export def Refresh()
+    if !Usable()
+        return
+    endif
+    try
+        var model = git.Comparison(view.model.root, view.model.args, view.model.mode == 'commit')
+        var selected = empty(model.entries) ? -1 : 0
+        if view.selected >= 0
+            var old = view.model.entries[view.selected]
+            for i in range(len(model.entries))
+                if model.entries[i].section == old.section && model.entries[i].path == old.path
+                    selected = i
+                    break
+                endif
+            endfor
         endif
-        var root = trim(system('git rev-parse --show-toplevel'))
-        if v:shell_error != 0
-            echoerr '[diffview] not a git repository'
-            return
-        endif
-        var pwd = trim(system('pwd'))
-        if root != pwd
-            echoerr '[diffview] not in the root directory of git'
-            return
-        endif
-
-        this.Layouts(branch0)
-        this.initialized = true
-        this.branch = branch0
-
-        this.UpdateModifiedFile()
-        if branch0 == "current"
-            this.UpdateStagedFile()
-            execute("normal! \<c-w>k")
-        endif
-    enddef
-
-    def Layouts(branch0: string)
-        const modified_layout = 'vertical topleft:30 split ' .. this.modifid_bufname
-        const staged_layout = 'horizontal rightbelow split ' .. this.staged_bufname
-
-        var branch1 = branch0
-        if branch1 == "current"
-            branch1 = trim(system('git rev-parse --abbrev-ref HEAD'))
-            if v:shell_error != 0
-                return
+        var content = selected < 0 ? {} : git.Read(model, model.entries[selected])
+        var key = tree.CursorKey(view.windows[0], view.tree)
+        var candidate = tree.Build(model, tree.Expansion(view.tree))
+        if view.selected < 0 || !has_key(candidate.diffview_nodes, key)
+            key = 'root'
+            if selected >= 0
+                var node = candidate.diffview_entries[selected]
+                tree.ExpandParents(node)
+                key = node.diffview_key
             endif
         endif
-
-        this.Layout(modified_layout, branch1)
-        if branch0 == "current"
-            this.Layout(staged_layout, '')
+        tree.Install(view.windows[0], candidate)
+        view.model = model
+        view.tree = candidate
+        tree.Cursor(view.windows[0], candidate, key)
+        if selected < 0
+            EmptyView()
+        else
+            Show(selected, content, false)
         endif
-    enddef
+    catch
+        Error(v:exception)
+    endtry
+enddef
 
-    def Close()
-        if !this.initialized
-            return
+export def Open(args: list<string>, commit = false)
+    var creating = false
+    var previous: dict<any> = {}
+    var previousFocus = 0
+    try
+        if commit && len(args) > 1
+            throw '[diffview] Usage: DiffviewCommit [revision]'
+        elseif !commit && len(args) != 0 && len(args) != 2
+            throw '[diffview] Usage: DiffviewOpen [left right]'
         endif
+        tree.Check()
+        var model = git.Comparison(git.Root(), args, commit)
+        var candidate = tree.Build(model)
+        var content = empty(model.entries) ? {} : git.Read(model, model.entries[0])
+        var origin = empty(view) ? win_getid() : view.origin
+        previous = view
+        previousFocus = win_getid()
+        creating = true
+        serial += 1
+        view = {token: serial, origin: origin, model: model, buffers: [], windows: [],
+            selected: -1, tree: candidate, timer: -1}
+        tabnew
+        add(view.windows, win_getid())
+        Buffer('panel')
+        nnoremap <silent> <buffer> <CR> <ScriptCmd>Select()<CR>
+        nnoremap <silent> <buffer> o <ScriptCmd>Select()<CR>
+        nnoremap <silent> <buffer> p <ScriptCmd>Navigate('p')<CR>
+        nnoremap <silent> <buffer> x <ScriptCmd>Navigate('x')<CR>
+        nnoremap <silent> <buffer> O <ScriptCmd>Navigate('O')<CR>
+        nnoremap <silent> <buffer> X <ScriptCmd>Navigate('X')<CR>
+        rightbelow vnew
+        add(view.windows, win_getid())
+        Buffer('left')
+        rightbelow vnew
+        add(view.windows, win_getid())
+        Buffer('right')
+        win_execute(view.windows[0], 'vertical resize 36')
+        win_execute(view.windows[0], 'setlocal winfixwidth')
+        tree.Install(view.windows[0], candidate)
+        if !empty(model.entries)
+            Show(0, content)
+        else
+            EmptyView()
+        endif
+        var created = view
+        view = previous
+        Close()
+        view = created
+        Events()
+        win_gotoid(view.windows[0])
+        g:diffview_enabled = true
+    catch
+        Error(v:exception)
+        if creating
+            Close()
+            view = previous
+            if !empty(view)
+                Events()
+            endif
+            g:diffview_enabled = !empty(view)
+            win_gotoid(previousFocus)
+        endif
+    endtry
+enddef
 
-        var winnr = FocusOn(this.modifid_bufname)
-        if winnr != -1
-            execute("quit")
-        endif
-
-        winnr = FocusOn(this.staged_bufname)
-        if winnr != -1
-            execute("quit")
-        endif
-
-        this.initialized = false
-        this.branch = ""
-    enddef
-
-    def CloseIf()
-        if bufwinnr(this.modifid_bufname) == -1 || 
-                bufwinnr(this.staged_bufname) == -1
-            this.Close()
-        endif
-    enddef
-
-    def OnWinClosed()
-        if bufwinnr("%") == bufwinnr(this.modifid_bufname) 
-            this.Close()
-            DiffBranchEnd()
-        endif
-        if tmp_buf == ''
-            return
-        endif
-        if bufwinnr(tmp_buf) == winnr()
-            CleanUpPreTmp()
-        endif
-    enddef
-
-    def OnBufWinEnter()
-        if tmp_buf == ''
-            return
-        endif
-        if bufwinnr(tmp_buf) == -1
-            CleanUpPreTmp()
-        endif
-    enddef
-endclass
-
-var diffview = DiffView.new()
-var diffbranch = DiffView.new()
-
+export def Toggle()
+    if empty(view)
+        Open([])
+    else
+        Close()
+    endif
+enddef

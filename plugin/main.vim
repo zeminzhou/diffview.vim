@@ -14,25 +14,29 @@ vim9script
 #
 #    You should have received a copy of the GNU Affero General Public License
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#    Modified 2026-10-22: native read-only diff browser.
+
+if get(g:, 'loaded_diffview', false)
+    finish
+endif
+if v:version < 901 || !has('diff') || !has('windows') || !has('job') || !has('timers')
+    echoerr '[diffview] Requires Vim 9.1 with +diff, +windows, +job and +timers.'
+    finish
+endif
+g:loaded_diffview = true
 
 import autoload 'diffview/current.vim' as current
 
 def g:ToggleDiffView()
-    if v:version < 901
-        echoerr '[diffview] requires a higher vim version'
-        return
-    endif
-    if !get(g:, 'diffview_enabled', false)
-        g:diffview_enabled = true
-        current.Initialize()
-    else
-        g:diffview_enabled = false
-        current.Deinitialize()
-    endif
+    current.Toggle()
 enddef
 
 def g:DiffBranch(branch0: string)
-    current.DiffBranch(branch0)
+    current.Open([branch0, 'HEAD'])
 enddef
 
-command! -nargs=1 DiffBranch :call g:DiffBranch('<args>')
+command! -nargs=* DiffviewOpen call current.Open([<f-args>])
+command! -nargs=* DiffviewCommit call current.Open([<f-args>], true)
+command! -nargs=0 DiffviewRefresh call current.Refresh()
+command! -nargs=0 DiffviewClose call current.Close()
+command! -nargs=1 DiffBranch call g:DiffBranch(<f-args>)

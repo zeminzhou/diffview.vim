@@ -8,12 +8,6 @@ The sidebar shows changed files in expandable directories, with Git status
 markers on files and their parents. The content panes use Vim's built-in diff
 mode and identify the source on each side.
 
-> **This guide describes the NERDTree edition on
-> [codex/nerdtree-integration](https://github.com/zeminzhou/diffview.vim/tree/codex/nerdtree-integration).**
-> The default `main` branch still contains the original implementation.
-> Use the branch-specific installation instructions below for the new edition,
-> or see [Legacy main usage](#legacy-main-usage) for the commands available on `main`.
-
 ## Contents
 
 - [Requirements](#requirements)
@@ -25,7 +19,6 @@ mode and identify the source on each side.
 - [Refresh, snapshots and closing](#refresh-snapshots-and-closing)
 - [Supported files and edge cases](#supported-files-and-edge-cases)
 - [Migrating from the older version](#migrating-from-the-older-version)
-- [Legacy main usage](#legacy-main-usage)
 - [Troubleshooting](#troubleshooting)
 - [Development and testing](#development-and-testing)
 - [Limitations](#limitations)
@@ -56,11 +49,12 @@ Add these entries inside your existing `plug#begin()` / `plug#end()` block:
 
 ```vim
 Plug 'preservim/nerdtree'
-Plug 'zeminzhou/diffview.vim', { 'branch': 'codex/nerdtree-integration' }
+Plug 'zeminzhou/diffview.vim'
 ```
 
-If NERDTree is already installed, keep one declaration. Replace an existing
-Diffview declaration with the branch-specific entry above.
+If NERDTree is already installed, keep one declaration. The entry above follows
+`main`. If you previously pinned Diffview to a development branch, remove that
+`branch` option before updating.
 
 Save your vimrc and restart Vim, then run `:PlugInstall` (or
 `:PlugUpdate diffview.vim` for an existing installation). Restart Vim after the
@@ -76,15 +70,13 @@ For a new installation using Vim's standard package directory:
 mkdir -p ~/.vim/pack/plugins/start
 git clone https://github.com/preservim/nerdtree.git \
   ~/.vim/pack/plugins/start/nerdtree
-git clone --branch codex/nerdtree-integration \
-  https://github.com/zeminzhou/diffview.vim.git \
+git clone https://github.com/zeminzhou/diffview.vim.git \
   ~/.vim/pack/plugins/start/diffview.vim
 ```
 
 Restart Vim after installation. These commands assume the destination
 directories do not already exist; use your existing installation if they do.
-Other plugin managers should load both plugins and select the same Diffview
-branch. If you lazy-load plugins, make NERDTree available before a Diffview
+Other plugin managers should load both plugins from their default branches. If you lazy-load plugins, make NERDTree available before a Diffview
 command runs.
 
 ### Help and optional mappings
@@ -309,31 +301,11 @@ plugin, use `DiffviewOpen A B` for two trees and `DiffviewCommit rev` for a
 commit's first-parent changes. No single-revision working-tree shorthand is
 provided.
 
-## Legacy main usage
-
-The default `main` branch contains the original version. Its entry points are:
-
-```vim
-:call ToggleDiffView()
-:DiffBranch main
-```
-
-Start Vim at the repository root. `ToggleDiffView()` opens the local
-modified/staged lists; use `o` to open a selected file, and call the toggle again
-to close its local view. In this version, `DiffBranch {ref}` lists changes
-between that ref and the working directory.
-
-`DiffviewOpen`, `DiffviewCommit`, `DiffviewRefresh` and `DiffviewClose` belong to
-the NERDTree edition and are not available on legacy `main`. The read-only
-snapshot and lifecycle guarantees above apply to the NERDTree edition; legacy
-`main` opens working files directly. Install the feature branch to use the new
-comparison model and navigation.
-
 ## Troubleshooting
 
-**Commands are missing, or the old interface still opens.** Check the installed
-branch and restart Vim after updating. The current NERDTree implementation is on
-`codex/nerdtree-integration`. `:scriptnames` shows loaded scripts, and
+**Commands are missing, or the old interface still opens.** Update the plugin
+from `main` and restart Vim. If your plugin manager is pinned to a development
+branch, remove that pin before updating. `:scriptnames` shows loaded scripts, and
 `:verbose command DiffviewOpen` identifies the command's source. Avoid keeping
 two installed copies of Diffview on `runtimepath`.
 
@@ -366,7 +338,7 @@ For command details, see `:help diffview`. For errors, inspect `:messages`,
 ## Development and testing
 
 Tests use external, pinned upstream checkouts; they do not download or vendor
-dependencies. From a checkout of `codex/nerdtree-integration`:
+dependencies. From the repository root:
 
 ```sh
 deps=$(mktemp -d)
@@ -389,11 +361,11 @@ isolation, lifecycle and binary/index regressions. It compares complete fixture
 contents, including Git indexes and object databases. Omitting
 `NERDTREE_GIT_RUNTIME` explicitly reports the coexistence case as `NOT RUN`;
 provide both dependencies for a complete run. The runner supports `VIM` and
-`DIFFVIEW_TEST_RUNTIME` overrides; see [tests/README.md](https://github.com/zeminzhou/diffview.vim/blob/codex/nerdtree-integration/tests/README.md).
+`DIFFVIEW_TEST_RUNTIME` overrides; see [tests/README.md](tests/README.md).
 
 Interactive acceptance also covers real terminal keys, pane focus, hunk
 navigation, dirty buffers, existing mirrored NERDTrees, register preservation,
-resizing and closing. See the [terminal checklist](https://github.com/zeminzhou/diffview.vim/blob/codex/nerdtree-integration/tests/manual.md). Headless
+resizing and closing. See the [terminal checklist](tests/manual.md). Headless
 success alone does not establish terminal usability.
 
 ## Limitations
