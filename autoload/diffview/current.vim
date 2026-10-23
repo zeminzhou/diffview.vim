@@ -394,6 +394,11 @@ def RollbackPicker(origin: dict<any>)
     var buffer = bufnr()
     var temporary = index(origin.buffers, buffer) < 0
         && (&filetype == 'fzf' || (bufname() == '' && !&modified && getline(1, '$') == ['']))
+    if temporary && &buftype == 'terminal'
+        # Detach the owned terminal before restoring a caller over bufhidden=wipe.
+        setbufvar(buffer, '&bufhidden', 'hide')
+        job_stop(term_getjob(buffer), 'kill')
+    endif
     if temporary && index(origin.windows, window) < 0
         if winnr('$') == 1 && tabpagenr('$') > 1
             noautocmd tabclose
