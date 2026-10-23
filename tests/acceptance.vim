@@ -268,7 +268,7 @@ enddef
 
 def WindowOptions(id: number): list<any>
   var tabwin = win_id2tabwin(id)
-  return ['diff', 'scrollbind', 'cursorbind', 'foldmethod', 'foldcolumn', 'wrap']->mapnew(
+  return ['diff', 'scrollbind', 'cursorbind', 'foldmethod', 'foldcolumn', 'wrap', 'winfixwidth', 'winfixheight']->mapnew(
     (_, option) => gettabwinvar(tabwin[0], tabwin[1], '&' .. option))
 enddef
 
@@ -1526,11 +1526,13 @@ def PickerEnew()
   edit change.txt
   setline(1, ['UNSAVED enew picker user'])
   set nohidden autowrite autowriteall
+  setlocal nowinfixwidth nowinfixheight
   var userbuf = bufnr()
   var dirty_before = &modified
   var origin = win_getid()
   var disk = readfile('change.txt', 'b')
   var options = [&hidden, &autowrite, &autowriteall]
+  var caller_options = WindowOptions(origin)
   DiffviewCommit HEAD
   Select('', 'change.txt')
   win_gotoid(origin)
@@ -1546,6 +1548,7 @@ def PickerEnew()
   PickerFilter('NO_COMMIT_MATCH_0f962372')
   assert_equal([origin], g:diffview_test_picker_windows, 'real fzf terminal reused caller window')
   assert_equal(state, ComparisonState(), 'in-place no match restores caller and old view')
+  assert_equal(caller_options, WindowOptions(origin), 'no match preserves caller window options')
   assert_equal(userbuf, bufnr())
   assert_equal({window: 'enew'}, g:fzf_layout)
   assert_equal(options, [&hidden, &autowrite, &autowriteall])
@@ -1556,6 +1559,7 @@ def PickerEnew()
   assert_equal([origin, origin], g:diffview_test_picker_windows, 'selection used the requested enew layout')
   Select('', 'change.txt')
   Pair(['PICK ROOT'], ['PICK OLDER'])
+  assert_equal(caller_options, WindowOptions(origin), 'selection preserves caller window options')
   assert_equal(options, [&hidden, &autowrite, &autowriteall])
   assert_equal(disk, readfile('change.txt', 'b'))
   assert_true(getbufvar(userbuf, '&modified'))
@@ -1568,6 +1572,7 @@ def PickerEnew()
   WaitPicker()
   assert_equal([origin, origin, origin], g:diffview_test_picker_windows, 'abort used the requested enew layout')
   assert_equal(state, ComparisonState(), 'real binary abort restores caller and old view')
+  assert_equal(caller_options, WindowOptions(origin), 'abort preserves caller window options')
   assert_equal(userbuf, bufnr())
   assert_equal(options, [&hidden, &autowrite, &autowriteall])
   assert_equal({window: 'enew'}, g:fzf_layout)
@@ -1581,6 +1586,7 @@ def PickerEnew()
   WaitPicker()
   assert_equal(origin, g:diffview_test_layout_window, 'failure occurred after executing the real enew layout')
   assert_equal(state, ComparisonState(), 'real layout initialization error preserves old view and caller')
+  assert_equal(caller_options, WindowOptions(origin), 'initialization failure preserves caller winfix and other options')
   assert_equal(userbuf, bufnr())
   assert_equal(options, [&hidden, &autowrite, &autowriteall])
   assert_equal(disk, readfile('change.txt', 'b'))
@@ -1593,7 +1599,8 @@ def PickerEnew()
     origin: origin, terminal_windows: g:diffview_test_picker_windows,
     initialization_window: g:diffview_test_layout_window, dirty_before: dirty_before,
     dirty_after: getbufvar(userbuf, '&modified'), options_before: options,
-    options_after: [&hidden, &autowrite, &autowriteall]})], test_tmp .. '/picker-enew.facts.json')
+    options_after: [&hidden, &autowrite, &autowriteall], caller_options_before: caller_options,
+    caller_options_after: WindowOptions(origin)})], test_tmp .. '/picker-enew.facts.json')
   DiffviewClose
 enddef
 
