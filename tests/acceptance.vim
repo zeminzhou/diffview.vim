@@ -268,7 +268,7 @@ enddef
 
 def WindowOptions(id: number): list<any>
   var tabwin = win_id2tabwin(id)
-  return ['diff', 'scrollbind', 'cursorbind', 'foldmethod', 'foldcolumn', 'wrap', 'winfixwidth', 'winfixheight']->mapnew(
+  return ['diff', 'scrollbind', 'cursorbind', 'foldmethod', 'foldcolumn', 'wrap', 'winfixwidth', 'winfixheight', 'number', 'spell']->mapnew(
     (_, option) => gettabwinvar(tabwin[0], tabwin[1], '&' .. option))
 enddef
 
@@ -1521,12 +1521,18 @@ def PickerNoMatch()
   DiffviewClose
 enddef
 
+def PickerFileTypeFailure()
+  g:diffview_test_started_picker_jobs = job_info()->filter((_, job) =>
+    index(g:diffview_test_prior_jobs, job) < 0 && job_status(job) == 'run')
+  throw 'fixture picker post-terminal FileType failure'
+enddef
+
 def PickerEnew()
   execute 'cd ' .. fnameescape(test_tmp .. '/picker repo 中文')
   edit change.txt
   setline(1, ['UNSAVED enew picker user'])
   set nohidden autowrite autowriteall
-  setlocal nowinfixwidth nowinfixheight
+  setlocal number spell nowinfixwidth nowinfixheight
   var userbuf = bufnr()
   var dirty_before = &modified
   var origin = win_getid()
@@ -1538,14 +1544,21 @@ def PickerEnew()
   win_gotoid(origin)
   SeedRegisters()
   g:diffview_test_picker_windows = []
+  g:diffview_test_picker_popups = []
   augroup DiffviewPickerObservation
     autocmd FileType fzf call add(g:diffview_test_picker_windows, win_getid())
+    autocmd FileType fzf call add(g:diffview_test_picker_popups, popup_list())
   augroup END
   var state = ComparisonState()
+  execute 'tcd ' .. fnameescape(getcwd())
+  var initial_cwd = [getcwd(), getcwd(-1), haslocaldir()]
+  assert_equal(2, initial_cwd[2], 'caller is already tab-local before the picker starts')
   g:fzf_layout = {window: 'enew'}
   assert_equal(userbuf, bufnr(), 'real in-place picker starts in the dirty user buffer')
   assert_true(&modified)
   PickerFilter('NO_COMMIT_MATCH_0f962372')
+  var no_match_cwd = [getcwd(), getcwd(-1), haslocaldir()]
+  assert_equal(initial_cwd, no_match_cwd, 'normal no match preserves pre-existing tcd path and scope')
   assert_equal([origin], g:diffview_test_picker_windows, 'real fzf terminal reused caller window')
   assert_equal(state, ComparisonState(), 'in-place no match restores caller and old view')
   assert_equal(caller_options, WindowOptions(origin), 'no match preserves caller window options')
@@ -1592,6 +1605,90 @@ def PickerEnew()
   assert_equal(disk, readfile('change.txt', 'b'))
   assert_equal(['UNSAVED enew picker user'], getbufline(userbuf, 1, '$'))
   assert_true(getbufvar(userbuf, '&modified'))
+  var user_job = job_start(['/bin/sleep', '30'], {in_io: 'null', out_io: 'null', err_io: 'null'})
+  var picker_quiet = false
+  var user_job_preserved = false
+  var picker_jobs_started = 0
+  var post_fault_cwd: list<any> = []
+  try
+    assert_equal('run', job_status(user_job), 'an unrelated user job is really running before the fault')
+    g:diffview_test_prior_jobs = job_info()
+    g:diffview_test_started_picker_jobs = []
+    augroup DiffviewPickerLiveFailure
+      execute 'autocmd FileType fzf legacy call ' .. expand('<SID>') .. 'PickerFileTypeFailure()'
+    augroup END
+    g:fzf_layout = {window: 'enew'}
+    state = ComparisonState()
+    execute 'tcd ' .. fnameescape(initial_cwd[0])
+    assert_equal(initial_cwd, [getcwd(), getcwd(-1), haslocaldir()], 'fault also starts with tab-local scope=2')
+    Reject('DiffviewCommit')
+    assert_match('fixture picker post-terminal FileType failure', execute('messages') .. v:errmsg,
+      'cleanup must preserve the original FileType error')
+    picker_jobs_started = len(g:diffview_test_started_picker_jobs)
+    assert_true(picker_jobs_started > 0, 'FileType fault occurs after a real picker job starts')
+    var quiet_ticks = 0
+    var started = reltime()
+    while quiet_ticks < 3 && reltimefloat(reltime(started)) < 5.0
+      sleep 20m
+      var pending = filter(copy(g:diffview_test_started_picker_jobs), (_, job) => job_status(job) == 'run'
+        || index(['open', 'buffered'], ch_status(job_getchannel(job))) >= 0)
+      quiet_ticks = empty(pending) ? quiet_ticks + 1 : 0
+    endwhile
+    picker_quiet = quiet_ticks >= 3
+    assert_true(picker_quiet, 'owned picker jobs and channels become quiet within five seconds')
+    assert_equal(state, ComparisonState(), 'post-terminal fault restores caller, old view and all resources')
+    post_fault_cwd = [getcwd(), getcwd(-1), haslocaldir()]
+    assert_equal(initial_cwd, post_fault_cwd, 'post-terminal fault preserves pre-existing tcd path and scope')
+    assert_equal(caller_options, WindowOptions(origin), 'post-terminal fault restores all caller window options')
+    assert_equal(userbuf, bufnr())
+    assert_equal(options, [&hidden, &autowrite, &autowriteall])
+    assert_equal(disk, readfile('change.txt', 'b'))
+    assert_equal(['UNSAVED enew picker user'], getbufline(userbuf, 1, '$'))
+    assert_true(getbufvar(userbuf, '&modified'))
+    user_job_preserved = job_status(user_job) == 'run'
+    assert_true(user_job_preserved, 'picker rollback must leave the pre-existing user job running')
+  finally
+    augroup DiffviewPickerLiveFailure
+      autocmd!
+    augroup END
+    # Only the test-created background sleeper is ours to stop.
+    if job_status(user_job) == 'run'
+      job_stop(user_job)
+    endif
+  endtry
+  state = ComparisonState()
+  execute 'tcd ' .. fnameescape(initial_cwd[0])
+  assert_equal(initial_cwd, [getcwd(), getcwd(-1), haslocaldir()])
+  unlet g:fzf_layout
+  var popup_start = len(g:diffview_test_picker_popups)
+  PickerFilter('NO_COMMIT_MATCH_0f962372')
+  assert_true(!empty(filter(copy(g:diffview_test_picker_popups[popup_start : ]), (_, ids) => !empty(ids))),
+    'default core layout really creates a popup')
+  win_gotoid(Role('panel').winid)
+  win_gotoid(origin)
+  sleep 40m
+  assert_equal(state, ComparisonState(), 'default popup no match retains the old view and caller')
+  var popup_no_match_cwd = [getcwd(), getcwd(-1), haslocaldir()]
+  assert_equal(initial_cwd, popup_no_match_cwd, 'default popup preserves initial tcd after deferred WinEnter')
+  assert_equal([], popup_list(), 'normal no-match popup is cleaned')
+  assert_equal(caller_options, WindowOptions(origin))
+  execute 'tcd ' .. fnameescape(initial_cwd[0])
+  assert_equal(initial_cwd, [getcwd(), getcwd(-1), haslocaldir()])
+  popup_start = len(g:diffview_test_picker_popups)
+  PickerFilter('PICK_OLDER')
+  assert_true(!empty(filter(copy(g:diffview_test_picker_popups[popup_start : ]), (_, ids) => !empty(ids))))
+  Select('', 'change.txt')
+  Pair(['PICK ROOT'], ['PICK OLDER'])
+  win_gotoid(origin)
+  sleep 40m
+  var popup_selected_cwd = [getcwd(), getcwd(-1), haslocaldir()]
+  assert_equal(initial_cwd, popup_selected_cwd, 'default popup selection retains caller initial tcd after WinEnter')
+  assert_equal(userbuf, bufnr())
+  assert_equal(caller_options, WindowOptions(origin))
+  assert_equal(options, [&hidden, &autowrite, &autowriteall])
+  assert_equal(disk, readfile('change.txt', 'b'))
+  assert_true(getbufvar(userbuf, '&modified'))
+  assert_equal([], popup_list(), 'successful popup is cleaned')
   augroup DiffviewPickerObservation
     autocmd!
   augroup END
@@ -1600,7 +1697,11 @@ def PickerEnew()
     initialization_window: g:diffview_test_layout_window, dirty_before: dirty_before,
     dirty_after: getbufvar(userbuf, '&modified'), options_before: options,
     options_after: [&hidden, &autowrite, &autowriteall], caller_options_before: caller_options,
-    caller_options_after: WindowOptions(origin)})], test_tmp .. '/picker-enew.facts.json')
+    caller_options_after: WindowOptions(origin), post_terminal_jobs_started: picker_jobs_started,
+    owned_jobs_quiet: picker_quiet, unrelated_user_job_preserved: user_job_preserved,
+    initial_cwd: initial_cwd, no_match_cwd: no_match_cwd, post_fault_cwd: post_fault_cwd,
+    popup_events: g:diffview_test_picker_popups, popup_no_match_cwd: popup_no_match_cwd,
+    popup_selected_cwd: popup_selected_cwd})], test_tmp .. '/picker-enew.facts.json')
   DiffviewClose
 enddef
 
