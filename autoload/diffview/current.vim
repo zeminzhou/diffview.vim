@@ -399,7 +399,9 @@ def RollbackPicker(origin: dict<any>)
         setbufvar(buffer, '&bufhidden', 'hide')
         job_stop(term_getjob(buffer), 'kill')
     endif
-    if temporary && index(origin.windows, window) < 0
+    if temporary && win_gettype(window) == 'popup'
+        popup_close(window)
+    elseif temporary && index(origin.windows, window) < 0
         if winnr('$') == 1 && tabpagenr('$') > 1
             noautocmd tabclose
         else
@@ -441,6 +443,8 @@ export def Commit(args: list<string>)
         var autowriteall = &autowriteall
         var caller = bufnr()
         var bufferHidden = &l:bufhidden
+        var directory = getcwd()
+        var directoryScope = haslocaldir()
         var origin = {window: win_getid(), buffer: caller, position: winsaveview(),
             layout: winrestcmd(), buffers: getbufinfo()->mapnew((_, b) => b.bufnr),
             windows: getwininfo()->mapnew((_, w) => w.winid), options: {}}
@@ -463,6 +467,19 @@ export def Commit(args: list<string>)
             RollbackPicker(origin)
             throw '[diffview] Cannot open fzf: ' .. failure
         finally
+            var location = win_id2tabwin(origin.window)
+            if directoryScope == 2 && location[0] != 0
+                && getcwd(location[1], location[0]) == directory
+                && getcwd(-1, location[0]) == directory
+                # Core's synchronous creation also mistakes an initial tcd for lcd.
+                if haslocaldir(location[1], location[0]) == 1
+                    win_execute(origin.window, 'noautocmd tcd ' .. fnameescape(directory))
+                endif
+                var pushed = getwinvar(origin.window, 'fzf_pushd', {})
+                if get(pushed, 'origin', '') == directory && get(pushed, 'dir', '') == directory
+                    win_execute(origin.window, 'unlet! w:fzf_pushd')
+                endif
+            endif
             &hidden = hidden
             &autowrite = autowrite
             &autowriteall = autowriteall

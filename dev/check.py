@@ -790,30 +790,46 @@ call assert_true(&modified)
 call win_gotoid(panel)
 call Pair([''], ['ROOT'], root_commit)
 call win_gotoid(origin)
-let $FZF_DEFAULT_OPTS = ''
-let g:fzf_layout = {'window': 'enew'}
-augroup DiffviewPickerInitializationFailure
-  autocmd FileType fzf let g:failed_picker_job = term_getjob(bufnr()) | let g:failed_picker_status = job_status(g:failed_picker_job) | throw 'forced fzf FileType initialization failure'
-augroup END
-DiffviewCommit
-augroup DiffviewPickerInitializationFailure
-  autocmd!
-augroup END
-call WaitPicker()
-call assert_equal('run', g:failed_picker_status, 'FileType failure happens after the real terminal job starts')
-call assert_equal('dead', job_status(g:failed_picker_job), 'failed picker stops its owned terminal job')
-call assert_match('Cannot open fzf: forced fzf FileType initialization failure', execute('messages'))
-call assert_equal(origin, win_getid())
-call assert_equal(userbuf, bufnr())
-call assert_equal(resources, [map(getbufinfo(), {_, b -> b.bufnr}), map(getwininfo(), {_, w -> [w.winid, w.bufnr]})])
-call assert_equal(options, [&winfixwidth, &winfixheight, &number, &spell, &hidden, &autowrite, &autowriteall])
-call assert_equal(position, winsaveview())
-call assert_equal('wipe', &bufhidden)
-call assert_equal(['UNSAVED picker buffer'], getline(1, '$'))
-call assert_true(&modified)
-call win_gotoid(panel)
-call Pair([''], ['ROOT'], root_commit)
-call win_gotoid(origin)
+for layout in ['enew', 'default']
+  if layout == 'enew'
+    let g:fzf_layout = {'window': 'enew'}
+  else
+    unlet! g:fzf_layout
+  endif
+  execute 'tcd ' . fnameescape(getcwd())
+  let caller_directory = getcwd()
+  call assert_equal(2, haslocaldir())
+  let $FZF_DEFAULT_OPTS = '--filter=unmatched-picker-query'
+  DiffviewCommit
+  call WaitPicker()
+  call assert_equal([caller_directory, 2], [getcwd(), haslocaldir()], 'creation preserves a preexisting tab-local cwd on no match')
+  call assert_equal(resources, [map(getbufinfo(), {_, b -> b.bufnr}), map(getwininfo(), {_, w -> [w.winid, w.bufnr]})])
+  execute 'tcd ' . fnameescape(caller_directory)
+  let $FZF_DEFAULT_OPTS = ''
+  augroup DiffviewPickerInitializationFailure
+    autocmd FileType fzf let g:failed_picker_job = term_getjob(bufnr()) | let g:failed_picker_status = job_status(g:failed_picker_job) | throw 'forced fzf FileType initialization failure'
+  augroup END
+  DiffviewCommit
+  augroup DiffviewPickerInitializationFailure
+    autocmd!
+  augroup END
+  call WaitPicker()
+  call assert_equal('run', g:failed_picker_status, 'FileType failure happens after the real terminal job starts')
+  call assert_equal('dead', job_status(g:failed_picker_job), 'failed picker stops its owned terminal job')
+  call assert_match('Cannot open fzf: forced fzf FileType initialization failure', execute('messages'))
+  call assert_equal(origin, win_getid())
+  call assert_equal(userbuf, bufnr())
+  call assert_equal(resources, [map(getbufinfo(), {_, b -> b.bufnr}), map(getwininfo(), {_, w -> [w.winid, w.bufnr]})])
+  call assert_equal(options, [&winfixwidth, &winfixheight, &number, &spell, &hidden, &autowrite, &autowriteall])
+  call assert_equal(position, winsaveview())
+  call assert_equal('wipe', &bufhidden)
+  call assert_equal(['UNSAVED picker buffer'], getline(1, '$'))
+  call assert_true(&modified)
+  call assert_equal([caller_directory, 2], [getcwd(), haslocaldir()], 'FileType failure preserves the initial cwd scope')
+  call win_gotoid(panel)
+  call Pair([''], ['ROOT'], root_commit)
+  call win_gotoid(origin)
+endfor
 let picker_cwd = getcwd()
 let global_cwd = getcwd(-1)
 let g:fzf_layout = {'window': 'enew'}
