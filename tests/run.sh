@@ -236,7 +236,7 @@ for test_case in $test_cases; do
     export DIFFVIEW_TEST_CASE="$test_case"
     if "${VIM:-vim}" -Nu NONE -U NONE -i NONE -n -es \
         -V1"$test_tmp/$test_case.vim.log" -S "$root/tests/acceptance.vim" \
-        > "$test_tmp/$test_case.stdout" 2>&1; then
+        > "$test_tmp/$test_case.stdout" 2>&1 && [ -f "$test_tmp/$test_case.result" ]; then
         cat "$test_tmp/$test_case.result"
         if [ "$test_case" = large ]; then
             cat "$test_tmp/large.metrics.json"
@@ -248,6 +248,9 @@ for test_case in $test_cases; do
             cat "$test_tmp/picker-enew.facts.json"
         fi
     else
+        if [ ! -f "$test_tmp/$test_case.result" ]; then
+            printf 'FAIL: %s (no completion receipt from Vim)\n' "$test_case" >&2
+        fi
         cat "$test_tmp/$test_case.errors" "$test_tmp/$test_case.stdout" 2>/dev/null || true
         suite_failed=1
     fi
