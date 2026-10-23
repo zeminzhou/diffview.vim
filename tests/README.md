@@ -86,7 +86,7 @@ Additional scenarios:
 | Case | Expected acceptance |
 | --- | --- |
 | trees | Divergent endpoint direction, left-only deletion absent from merge-base diff, ignored local/index dirt, add/delete/rename/mode, explicit trees/subtrees, legal quote/$()/pipe refs, empty result, legacy DiffBranch and Toggle |
-| commits | Normal, root, first-parent merge and default HEAD contents; source identities; forced-binary ordinary/root commits |
+| commits | Normal, root, first-parent merge and explicit HEAD contents; source identities; forced-binary ordinary/root commits |
 | historical_refresh | Fixed refs until refresh; explicit refresh re-resolves original names, preserves repository/selection and updates labels across tabs |
 | errors | Invalid revisions, blob/tree type mismatch, arities/ranges/options, non-Git/bare cwd and shallow missing parent; tagged error and old usable view retained |
 | exclusions | Regression: leading ^ exclusions rejected in each/both tree positions and commit mode while preserving the old view; valid merged^1/HEAD^1 remain accepted |

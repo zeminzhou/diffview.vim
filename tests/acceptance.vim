@@ -599,7 +599,7 @@ def Commits()
   Pair([''], ['LEFT only'])
   assert_false(join(getbufline(Role('panel').bufnr, 1, '$'), "\n") =~ 'deleted.txt',
     'merge view compares parent 1, not root/merge base')
-  execute 'DiffviewCommit'
+  execute 'DiffviewCommit HEAD'
   Select('', 'shared.txt')
   Pair(['RIGHT shared'], ['MERGED shared'])
   HistoricalIds([Ref('right')], [Ref('merge')])
