@@ -701,6 +701,17 @@ function! Pair(left, right, oid)
     call assert_false(getbufvar(Role(role), '&modifiable'))
   endfor
 endfunction
+function! WaitPickerQuery(buffer, query)
+  let started = reltime()
+  while reltimefloat(reltime(started)) < 5
+    call term_wait(a:buffer, 30)
+    let screen = join(map(range(1, term_getsize(a:buffer)[0]), {_, row -> term_getline(a:buffer, row)}), "\n")
+    if stridx(screen, 'Commit> ' . a:query) >= 0 && (a:query == '' || screen =~ '\s1/\d\+')
+      return
+    endif
+  endwhile
+  call assert_report('fzf query/results did not become visible')
+endfunction
 function! WaitPicker()
   let started = reltime()
   let idle = 0
@@ -760,6 +771,47 @@ DiffviewCommit
 call WaitPicker()
 call assert_equal(old_buffers, Buffers(), 'no match preserves existing view')
 call Pair([''], ['ROOT'], root_commit)
+let panel = win_getid()
+let origin = getbufinfo(userbuf)[0].windows[0]
+call win_gotoid(origin)
+let resources = [map(getbufinfo(), {_, b -> b.bufnr}), map(getwininfo(), {_, w -> [w.winid, w.bufnr]})]
+let options = [&winfixwidth, &winfixheight, &number, &spell, &hidden, &autowrite, &autowriteall]
+let position = winsaveview()
+let g:fzf_layout = {'window': 'enew | throw "forced after-enew initialization failure"'}
+DiffviewCommit
+call assert_equal(origin, win_getid(), 'initialization failure restores caller focus')
+call assert_equal(userbuf, bufnr(), 'initialization failure restores caller buffer')
+call assert_equal(resources, [map(getbufinfo(), {_, b -> b.bufnr}), map(getwininfo(), {_, w -> [w.winid, w.bufnr]})])
+call assert_equal(options, [&winfixwidth, &winfixheight, &number, &spell, &hidden, &autowrite, &autowriteall])
+call assert_equal(position, winsaveview())
+call assert_equal('wipe', &bufhidden)
+call assert_equal(['UNSAVED picker buffer'], getline(1, '$'))
+call assert_true(&modified)
+call win_gotoid(panel)
+call Pair([''], ['ROOT'], root_commit)
+call win_gotoid(origin)
+let picker_cwd = getcwd()
+let global_cwd = getcwd(-1)
+let g:fzf_layout = {'window': 'enew'}
+let $FZF_DEFAULT_OPTS = ''
+DiffviewCommit
+let terminal = filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, '&filetype') == 'fzf'})[0].bufnr
+execute 'tcd ' . fnameescape(other_repo)
+let chosen_cwd = getcwd()
+call assert_equal(2, haslocaldir())
+call WaitPickerQuery(terminal, '')
+call term_sendkeys(terminal, 'normal-picker-key')
+call WaitPickerQuery(terminal, 'normal-picker-key')
+call term_sendkeys(terminal, "\<CR>")
+call WaitPicker()
+call Pair(['ROOT'], ['NORMAL'], normal_commit)
+let caller_location = win_id2tabwin(origin)
+call assert_equal(chosen_cwd, getcwd(caller_location[1], caller_location[0]))
+call assert_equal(2, haslocaldir(caller_location[1], caller_location[0]), 'real asynchronous selection retains latest caller tcd scope')
+call assert_equal(global_cwd, getcwd(-1))
+call assert_true(getbufvar(userbuf, '&modified'))
+execute 'cd ' . fnameescape(picker_cwd)
+let g:fzf_layout = {'down': '40%'}
 function! fzf#run(spec) abort
   let g:picker_spec = a:spec
   let g:picker_calls = get(g:, 'picker_calls', 0) + 1
@@ -779,6 +831,10 @@ for output in [[], ['query', root_row], [root_row, root_row], ['bad selection'],
   call assert_equal(old_buffers, Buffers(), 'malformed output preserves the old view')
   call Pair([''], ['ROOT'], root_commit)
 endfor
+call call(g:picker_spec.exit, [2])
+call assert_match('\[diffview\].*fzf failed', execute('messages'))
+call assert_equal(old_buffers, Buffers())
+call Pair([''], ['ROOT'], root_commit)
 DiffviewClose
 call assert_equal(['UNSAVED picker buffer'], getbufline(userbuf, 1, '$'))
 call assert_true(getbufvar(userbuf, '&modified'))

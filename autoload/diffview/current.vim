@@ -342,7 +342,14 @@ export def Open(args: list<string>, commit = false, root = '')
     endtry
 enddef
 
-def SelectedCommit(root: string, source: list<string>, lines: any)
+def SelectedCommit(root: string, source: list<string>, origin: dict<any>, lines: any)
+    if get(origin, 'directoryScope', 0) == 2
+        var pushed = getwinvar(origin.window, 'fzf_pushd', {})
+        if get(pushed, 'origin', '') == origin.directory
+            # Core treats tab-local cwd as window-local when preparing its sink.
+            pushed.command = 'tcd'
+        endif
+    endif
     if type(lines) != v:t_list
         Error('Invalid fzf commit selection.')
         return
@@ -371,9 +378,39 @@ def SelectedCommit(root: string, source: list<string>, lines: any)
     endif
 enddef
 
-def PickerExit(code: number)
+def PickerExit(origin: dict<any>, code: number)
+    var location = win_id2tabwin(origin.window)
+    if location[0] != 0
+        origin.directory = getcwd(location[1], location[0])
+        origin.directoryScope = haslocaldir(location[1], location[0])
+    endif
     if index([0, 1, 130], code) < 0
         Error('fzf failed (exit ' .. code .. '). Check :messages and your fzf installation.')
+    endif
+enddef
+
+def RollbackPicker(origin: dict<any>)
+    var window = win_getid()
+    var buffer = bufnr()
+    var temporary = index(origin.buffers, buffer) < 0
+        && (&filetype == 'fzf' || (bufname() == '' && !&modified && getline(1, '$') == ['']))
+    if temporary && index(origin.windows, window) < 0
+        if winnr('$') == 1 && tabpagenr('$') > 1
+            noautocmd tabclose
+        else
+            noautocmd close
+        endif
+    endif
+    if bufexists(origin.buffer) && win_gotoid(origin.window)
+        execute 'noautocmd keepalt keepjumps hide buffer ' .. origin.buffer
+        for [name, value] in items(origin.options)
+            setwinvar(origin.window, '&' .. name, value)
+        endfor
+        execute 'noautocmd ' .. origin.layout
+        winrestview(origin.position)
+    endif
+    if temporary && bufexists(buffer)
+        execute 'silent! noautocmd bwipeout! ' .. buffer
     endif
 enddef
 
@@ -394,20 +431,32 @@ export def Commit(args: list<string>)
         if empty(source)
             throw '[diffview] No commits to select.'
         endif
-        var picker = fzf#wrap({source: source,
-            sinklist: (lines) => SelectedCommit(root, source, lines), exit: PickerExit,
-            options: ['--no-multi', '--no-print-query', '--no-expect', '--no-print0', '--no-read0',
-                '--accept-nth=..', '--delimiter=\t', '--with-nth=2..', '--nth=..', '--prompt=Commit> ']})
         var hidden = &hidden
         var autowrite = &autowrite
         var autowriteall = &autowriteall
         var caller = bufnr()
         var bufferHidden = &l:bufhidden
+        var origin = {window: win_getid(), buffer: caller, position: winsaveview(),
+            layout: winrestcmd(), buffers: getbufinfo()->mapnew((_, b) => b.bufnr),
+            windows: getwininfo()->mapnew((_, w) => w.winid), options: {}}
+        for name in ['winfixwidth', 'winfixheight', 'number', 'spell', 'diff', 'scrollbind',
+            'cursorbind', 'foldmethod', 'foldcolumn', 'wrap']
+            origin.options[name] = getwinvar(origin.window, '&' .. name)
+        endfor
+        var picker = fzf#wrap({source: source,
+            sinklist: (lines) => SelectedCommit(root, source, origin, lines),
+            exit: (code) => PickerExit(origin, code),
+            options: ['--no-multi', '--no-print-query', '--no-expect', '--no-print0', '--no-read0',
+                '--accept-nth=..', '--delimiter=\t', '--with-nth=2..', '--nth=..', '--prompt=Commit> ']})
         try
             # An in-place fzf layout must retain the caller without saving it.
             set hidden noautowrite noautowriteall
             setbufvar(caller, '&bufhidden', 'hide')
             fzf#run(picker)
+        catch
+            var failure = v:exception
+            RollbackPicker(origin)
+            throw '[diffview] Cannot open fzf: ' .. failure
         finally
             &hidden = hidden
             &autowrite = autowrite
