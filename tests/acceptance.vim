@@ -1891,7 +1891,7 @@ def PickerApi()
     assert_equal('', v:errmsg)
     assert_equal(state, ComparisonState(), 'normal/no-match/cancel exit preserves the comparison')
   endfor
-  Reject('call g:diffview_test_picker_spec.exit(2)')
+  Reject('legacy call g:diffview_test_picker_spec.exit(2)')
   assert_equal(state, ComparisonState(), 'failed fzf exit reports an error and preserves the comparison')
   try
     g:diffview_test_picker_throw = 1
