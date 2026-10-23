@@ -1717,7 +1717,7 @@ def PickerRow(query: string): string
   return found[0]
 enddef
 
-def PickerOutput(lines: list<string>, expect_error = false)
+def PickerOutput(lines: any, expect_error = false)
   messages clear
   v:errmsg = ''
   var error = ''
@@ -1792,11 +1792,21 @@ def PickerApi()
   state = ComparisonState()
   PickerOutput([])
   assert_equal(state, ComparisonState(), 'empty callback leaves the view intact')
-  for output in [['not a supplied row'], [row, row], ['typed query', row], ['ctrl-x', row],
+  var invalid_outputs: list<any> = [0, row, [1], ['not a supplied row'], [row, row], ['typed query', row], ['ctrl-x', row],
       [row .. ' tampered'], [Ref('picker-hidden') .. ' forged metadata']]
+  for output in invalid_outputs
     PickerOutput(output, true)
     assert_equal(state, ComparisonState(), 'unexpected/multiple picker output is not a commit request')
   endfor
+  for code in [0, 1, 130]
+    messages clear
+    v:errmsg = ''
+    call(g:diffview_test_picker_spec.exit, [code])
+    assert_equal('', v:errmsg)
+    assert_equal(state, ComparisonState(), 'normal/no-match/cancel exit preserves the comparison')
+  endfor
+  Reject('call g:diffview_test_picker_spec.exit(2)')
+  assert_equal(state, ComparisonState(), 'failed fzf exit reports an error and preserves the comparison')
   try
     g:diffview_test_picker_throw = 1
     Reject('DiffviewCommit')
@@ -1861,6 +1871,8 @@ try
   endif
   if case_name =~ '^picker_' && case_name != 'picker_missing'
     if case_name == 'picker_api'
+      &runtimepath = $FZF_RUNTIME .. ',' .. &runtimepath
+      runtime plugin/fzf.vim
       &runtimepath = harness_root .. '/tests/picker-api,' .. &runtimepath
       runtime autoload/fzf.vim
     elseif case_name == 'picker_old_binary'

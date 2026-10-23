@@ -125,8 +125,9 @@ Picker fixtures include six HEAD-reachable commits, a merged side branch and an
 excluded branch, Unicode/control/shell punctuation metadata, SHA-1/SHA-256 and
 staged/disk/unsaved differences. The runner clears inherited fzf defaults before
 setting intentional per-case defaults. Actual filtered core/binary execution
-is separate from the callback fixture under `picker-api/`, which only captures
-the public supplied spec and dispatches its sink. Neither is terminal UI evidence:
+is separate from the callback fixture under `picker-api/`, which retains real
+core wrap/exec and only intercepts run to capture the public spec and dispatch its
+sink/exit callbacks, including invalid types and exit codes. Neither is terminal UI evidence:
 search/Enter, Esc and Ctrl-C must also be exercised in a real terminal.
 The incompatible-binary case copies the real core file into a private temporary
 runtime without its bundled executable. Its version-only binary and installer
