@@ -76,3 +76,27 @@ The headless `large` case separately measures a 20,000-line file and 201-file
 list, including open, select, refresh and close durations. It checks full content
 and reports measurements; no latency target is invented. Review the measured
 limits when deciding whether the first version is responsive enough.
+
+For commit-picker acceptance, load the external core fzf plugin in this same
+terminal Vim with `FZF_RUNTIME` on runtimepath and `runtime plugin/fzf.vim`.
+Install its executable separately and record both PATH's version and the binary
+selected by `fzf#exec()`. Leave `FZF_DEFAULT_OPTS` free of `--filter`: an automatic
+filtered selection does not exercise interactive search or cancellation.
+Prepare older, root and merge commits with distinct contents and searchable
+author/subject metadata; preserve complete repository bytes before browsing.
+
+| Picker step | Expected |
+| --- | --- |
+| Set nohidden/autowriteall, retain a dirty file buffer and an existing comparison, then DiffviewCommit | Real searchable picker opens in the preferred core layout with no extra Enter; original bytes remain unsaved |
+| Type an older subject or author, then Enter; repeat using an abbreviated hash | Exactly that commit opens with correct parent/root/first-parent bodies, full object identity and source labels; tree keys remain usable |
+| Refresh the selected comparison | Same immutable commit remains selected without opening another picker |
+| From the dirty caller and from a comparison pane, reopen and press Esc; repeat with Ctrl-C | Picker UI disappears; caller focus, old comparison, dirty contents/modified flag, registers and ordinary tree survive |
+| Search for an absent string, then cancel | No comparison replacement or empty view; subsequent selection still works |
+| Repeat selection/cancellation with g:fzf_layout set to {window: 'enew'} | Respect the in-place layout without autosaving; restore hidden/autowrite/autowriteall and original dirty buffer |
+| Close/reopen, use pane/tree mappings and return to the ordinary tree | No orphan terminal/window/buffer; both interfaces remain usable |
+
+Record each actual selection and cancellation, dimensions, focus/layout and
+prompt observations outside the repository. Compare every original repository
+file, index, object and ref after restoring only declared fixture mutations.
+Report missing terminal coverage explicitly rather than inferring it from the
+filtered cases or the callback-injection fixture.

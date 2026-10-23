@@ -11,6 +11,14 @@ if [ -n "${NERDTREE_GIT_RUNTIME:-}" ] && [ ! -f "$NERDTREE_GIT_RUNTIME/nerdtree_
     printf 'Invalid NERDTREE_GIT_RUNTIME: expected an external nerdtree-git-plugin checkout.\n' >&2
     exit 1
 fi
+if [ -z "${FZF_RUNTIME:-}" ] || [ ! -f "$FZF_RUNTIME/plugin/fzf.vim" ]; then
+    printf 'Real core fzf is required for picker tests: set FZF_RUNTIME to its external checkout.\n' >&2
+    exit 1
+fi
+if ! command -v fzf > /dev/null 2>&1; then
+    printf 'Picker integration tests require the real fzf executable on PATH.\n' >&2
+    exit 1
+fi
 test_tmp=$(mktemp -d "${TMPDIR:-/tmp}/diffview-tests.XXXXXX")
 finish() {
     result=$?
@@ -26,12 +34,13 @@ trap 'exit 130' INT TERM
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY
 unset GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
 unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS
+unset FZF_DEFAULT_OPTS FZF_DEFAULT_OPTS_FILE FZF_DEFAULT_COMMAND
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_OPTIONAL_LOCKS=0
 export GIT_ATTR_NOSYSTEM=1
 export GIT_AUTHOR_NAME=Tester GIT_AUTHOR_EMAIL=tester@example.invalid
 export GIT_COMMITTER_NAME=Tester GIT_COMMITTER_EMAIL=tester@example.invalid
 export GIT_TERMINAL_PROMPT=0
-export DIFFVIEW_TEST_TMP="$test_tmp" DIFFVIEW_TEST_RUNTIME="$runtime" NERDTREE_RUNTIME
+export DIFFVIEW_TEST_TMP="$test_tmp" DIFFVIEW_TEST_RUNTIME="$runtime" NERDTREE_RUNTIME FZF_RUNTIME
 
 new_repo() {
     mkdir -p "$1"
@@ -133,6 +142,7 @@ printf 'OUTSIDE fixture marker\n' > "$test_tmp/outside/forced.dat"
 
 . "$root/tests/fixtures-c02.sh"
 . "$root/tests/fixtures-nerdtree.sh"
+. "$root/tests/fixtures-picker.sh"
 
 # Compare all fixture bytes, including indexes/objects, after Vim exits.
 cp -R "$test_tmp/local repo 中文" "$test_tmp/local-before"
@@ -152,6 +162,11 @@ git -C "$runtime" rev-parse HEAD
 git -C "$runtime" status --short -- plugin autoload
 "${VIM:-vim}" --version | sed -n '1,4p'
 git --version
+printf 'Core fzf: '
+git -C "$FZF_RUNTIME" rev-parse HEAD
+git -C "$FZF_RUNTIME" status --short -- plugin
+printf 'PATH fzf: '
+fzf --version
 printf 'NERDTree: '
 git -C "$NERDTREE_RUNTIME" rev-parse HEAD
 git -C "$NERDTREE_RUNTIME" status --short -- plugin autoload lib nerdtree_plugin syntax
@@ -167,11 +182,23 @@ cksum "$test_tmp/clean/.git/index"
 unset GIT_OPTIONAL_LOCKS
 export DIFFVIEW_TEST_REAL_GIT="$(command -v git)"
 export DIFFVIEW_TEST_GIT_LOG="$test_tmp/product-git.argv"
+: > "$DIFFVIEW_TEST_GIT_LOG"
 mkdir "$test_tmp/git-bin"
+mkdir "$test_tmp/no-fzf-bin"
+ln -s "$DIFFVIEW_TEST_REAL_GIT" "$test_tmp/no-fzf-bin/git"
+ln -s /bin/sh "$test_tmp/no-fzf-bin/sh"
 cat > "$test_tmp/git-bin/git" <<'EOF'
 #!/bin/sh
 printf '%s\000' "$@" >> "$DIFFVIEW_TEST_GIT_LOG"
 printf '\n' >> "$DIFFVIEW_TEST_GIT_LOG"
+if [ "${DIFFVIEW_TEST_FAIL_LOG:-0}" = 1 ]; then
+    for argument do
+        if [ "$argument" = log ]; then
+            printf 'fixture history read failure\n' >&2
+            exit 1
+        fi
+    done
+fi
 exec "$DIFFVIEW_TEST_REAL_GIT" "$@"
 EOF
 chmod +x "$test_tmp/git-bin/git"
@@ -179,7 +206,8 @@ export PATH="$test_tmp/git-bin:$PATH"
 suite_failed=0
 test_cases='local clean unborn nonrepo special refresh lifecycle ownership ancestor
     trees commits historical_refresh errors exclusions edges cross_tab read_failure navigation
-    binary_clean binary_mixed large empty_start tree_nodes tree_history tree_isolation dependency tree_rollback'
+    binary_clean binary_mixed large empty_start tree_nodes tree_history tree_isolation dependency tree_rollback
+    picker_real picker_no_match picker_enew picker_sha256 picker_missing picker_errors picker_api'
 if [ -n "${NERDTREE_GIT_RUNTIME:-}" ]; then
     test_cases="$test_cases tree_git"
 else
@@ -193,6 +221,9 @@ for test_case in $test_cases; do
         cat "$test_tmp/$test_case.result"
         if [ "$test_case" = large ]; then
             cat "$test_tmp/large.metrics.json"
+        fi
+        if [ "$test_case" = picker_real ]; then
+            cat "$test_tmp/picker-real.facts.json"
         fi
     else
         cat "$test_tmp/$test_case.errors" "$test_tmp/$test_case.stdout" 2>/dev/null || true
@@ -209,7 +240,7 @@ diff -r "$test_tmp/ancestor-before" "$test_tmp/ancestor"
 diff -r "$test_tmp/outside-before" "$test_tmp/outside"
 diff -r "$test_tmp/refresh-expected" "$test_tmp/refresh"
 for fixture in 'history repo 中文' edges cross-tab read-failure bare.git shallow large binary-clean binary-mixed \
-    'tree repo' tree-history user-tree; do
+    'tree repo' tree-history user-tree 'picker repo 中文' picker-sha256 picker-elsewhere; do
     diff -r "$test_tmp/$fixture-before" "$test_tmp/$fixture"
 done
 printf 'Stale-stat index after: '

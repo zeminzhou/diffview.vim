@@ -1,10 +1,10 @@
 # Acceptance tests
 
-The suite retains the 21 source/safety scenarios, adds real NERDTree integration
-cases, and compares all fixture bytes,
+The suite retains all 28 source/safety and NERDTree scenarios, adds seven commit
+picker cases, and compares all 23 fixture repositories/directories byte for byte,
 including indexes and object databases, before and after browsing.
 
-Use an external NERDTree checkout. Dependencies are never downloaded or vendored
+Use external NERDTree and core fzf checkouts. Dependencies are never downloaded or vendored
 by the runner:
 
 ```sh
@@ -13,8 +13,11 @@ git clone https://github.com/preservim/nerdtree.git "$deps/nerdtree"
 git -C "$deps/nerdtree" checkout 690d061b591525890f1471c6675bcb5bdc8cdff9
 git clone https://github.com/Xuyuanp/nerdtree-git-plugin.git "$deps/nerdtree-git-plugin"
 git -C "$deps/nerdtree-git-plugin" checkout e1fe727127a813095854a5b063c15e955a77eafb
+git clone https://github.com/junegunn/fzf.git "$deps/fzf"
+git -C "$deps/fzf" checkout b412a450538e5f4a1d7057732e75d945dafa18a6
 NERDTREE_RUNTIME="$deps/nerdtree" \
-NERDTREE_GIT_RUNTIME="$deps/nerdtree-git-plugin" sh tests/run.sh
+NERDTREE_GIT_RUNTIME="$deps/nerdtree-git-plugin" \
+FZF_RUNTIME="$deps/fzf" sh tests/run.sh
 ```
 
 `NERDTREE_RUNTIME` is mandatory; a missing checkout returns nonzero with setup
@@ -22,16 +25,21 @@ instructions. `NERDTREE_GIT_RUNTIME` enables the separate real git-plugin
 coexistence case. Without it the runner explicitly reports that case NOT RUN;
 a complete NERDTree acceptance run includes both dependencies. The git-status
 plugin is a compatibility test dependency, not a Diffview runtime requirement.
+`FZF_RUNTIME` and an already installed `fzf` executable on PATH are required for
+the picker integration cases. The separate fzf.vim plugin is not used. Core fzf
+may choose a newer bundled binary instead of PATH's binary; record both versions
+and the actual `fzf#exec()` result printed in the picker facts.
 
 The runner requires Git, POSIX shell tools, and Vim 9.1 with `+vim9script`,
-`+diff`, `+windows`, `+job` and `+timers`. Override `VIM` to select a Vim executable.
+`+diff`, `+windows`, `+job`, `+timers` and `+terminal`. Override `VIM` to select a Vim executable.
 
 To test a separately checked-out revision, run:
 
 ```sh
 DIFFVIEW_TEST_RUNTIME=/path/to/candidate \
 NERDTREE_RUNTIME=/path/to/nerdtree \
-NERDTREE_GIT_RUNTIME=/path/to/nerdtree-git-plugin sh tests/run.sh
+NERDTREE_GIT_RUNTIME=/path/to/nerdtree-git-plugin \
+FZF_RUNTIME=/path/to/fzf sh tests/run.sh
 ```
 
 The runner prints the candidate SHA and any uncommitted product files. It
@@ -104,6 +112,21 @@ Additional scenarios:
 | dependency | A missing real NERDTree reports installation guidance and preserves the original layout/dirty buffer |
 | tree_rollback | FileType failure plus native mid-render throws during new Open and changed-model Refresh preserve tree/node/row identities, bodies/sources, readonly/options, focus, registers, buffers/windows/timers/autocommands and the original dirty buffer |
 | tree_git | Optional real nerdtree-git-plugin coexistence: local status callbacks and flags remain isolated from staged/history diff flags and user trees |
+| picker_real | Real core/binary filtered selection by subject, author and short hash; reachable side history, root/merge semantics, metadata punctuation, fixed full-OID refresh and dirty-buffer protection |
+| picker_no_match | Real core/binary no match preserves caller focus, old comparison, registers, dirty buffer and an ordinary NERDTree |
+| picker_enew | Real in-place core layout with nohidden/autowriteall: selection, no match and initialization failure preserve dirty bytes/modified state, options and the old usable view |
+| picker_sha256 | Real core/binary selection and refresh retain the full 64-character commit identity and actual bodies |
+| picker_missing | Missing core plugin/binary give errors and preserve the comparison; explicit HEAD works with neither dependency |
+| picker_errors | Unborn, non-Git, bare and injected Git history failure report errors without replacing the old view |
+| picker_api | Public fzf callback boundary only: original repository/full OID after cwd/ref changes; malformed, duplicate and forged rows, launch/read/render errors and immutable refresh |
+
+Picker fixtures include six HEAD-reachable commits, a merged side branch and an
+excluded branch, Unicode/control/shell punctuation metadata, SHA-1/SHA-256 and
+staged/disk/unsaved differences. The runner clears inherited fzf defaults before
+setting intentional per-case defaults. Actual filtered core/binary execution
+is separate from the callback fixture under `picker-api/`, which only captures
+the public supplied spec and dispatches its sink. Neither is terminal UI evidence:
+search/Enter, Esc and Ctrl-C must also be exercised in a real terminal.
 
 The coexistence case drains jobs and channel-close callbacks after native tree
 creation, mirroring and buffer entry before recording its baseline. It then

@@ -2,6 +2,7 @@ vim9script
 
 const test_tmp = $DIFFVIEW_TEST_TMP
 const case_name = $DIFFVIEW_TEST_CASE
+const harness_root = expand('<sfile>:p:h:h')
 const user_registers = ['"', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', '-', '/', '=']
 
 def RegisterState(): dict<any>
@@ -1405,6 +1406,360 @@ def TreeRollback()
   assert_true(getbufvar(userbuf, '&modified'), 'tree errors never save or discard original edits')
 enddef
 
+def WaitPicker()
+  var started = reltime()
+  var idle = 0
+  while reltimefloat(reltime(started)) < 5.0
+    var ui = getbufinfo()->filter((_, b) => getbufvar(b.bufnr, '&filetype') == 'fzf')
+    var jobs = job_info()->filter((_, job) => job_status(job) == 'run'
+      || index(['open', 'buffered'], ch_status(job_getchannel(job))) >= 0)
+    idle = empty(ui) && empty(jobs) ? idle + 1 : 0
+    if idle >= 2
+      return
+    endif
+    sleep 10m
+  endwhile
+  throw 'Real fzf picker did not finish and clean its UI within 5 seconds'
+enddef
+
+def PickerFilter(query: string)
+  $FZF_DEFAULT_OPTS = '--filter=' .. shellescape(query)
+  DiffviewCommit
+  WaitPicker()
+enddef
+
+def PickerGitCalls(): list<string>
+  return filereadable($DIFFVIEW_TEST_GIT_LOG)
+    ? readfile($DIFFVIEW_TEST_GIT_LOG, 'b')->filter((_, line) => line != '') : []
+enddef
+
+def PickerOidUsed(oid: string, first_call: number)
+  var calls = PickerGitCalls()[first_call : ]
+  assert_true(!empty(filter(calls, (_, line) => index(split(line, "\n", true), 'rev-parse') >= 0
+    && index(split(line, "\n", true), oid .. '^{commit}') >= 0)),
+    'selected/refreshed commit is resolved using its full immutable OID')
+enddef
+
+def PickerReal()
+  execute 'cd ' .. fnameescape(test_tmp .. '/picker repo 中文/nested')
+  var cwd = getcwd()
+  edit ../change.txt
+  setline(1, ['UNSAVED picker user buffer'])
+  var userbuf = bufnr()
+  set nohidden autowriteall
+  var layout = deepcopy(g:fzf_layout)
+  var calls = len(PickerGitCalls())
+  PickerFilter('PICK_OLDER')
+  Select('', 'change.txt')
+  Pair(['PICK ROOT'], ['PICK OLDER'])
+  HistoricalIds([Ref('picker-root')], [Ref('picker-older')])
+  PickerOidUsed(Ref('picker-older'), calls)
+  assert_equal(cwd, getcwd(), 'picker does not permanently change nested cwd')
+  calls = len(PickerGitCalls())
+  DiffviewRefresh
+  Pair(['PICK ROOT'], ['PICK OLDER'])
+  PickerOidUsed(Ref('picker-older'), calls)
+  PickerFilter('META_AUTHOR_NEEDLE')
+  Select('', 'change.txt')
+  Pair(['PICK ROOT'], ['PICK OLDER'])
+  PickerFilter('ROOT_AUTHOR_NEEDLE')
+  Select('', 'change.txt')
+  Pair([''], ['PICK ROOT'])
+  HistoricalIds([], [Ref('picker-root')])
+  PickerFilter('PICK_MERGE')
+  assert_equal(1, len(Entries()), 'merge selection uses only first-parent changes')
+  Select('', 'side.txt')
+  Pair([''], ['PICK SIDE'])
+  HistoricalIds([Ref('picker-normal')], [Ref('picker-merge')])
+  PickerFilter('PICK_SIDE')
+  Select('', 'side.txt')
+  Pair([''], ['PICK SIDE'])
+  HistoricalIds([Ref('picker-root')], [Ref('picker-side')])
+  PickerFilter(Ref('picker-normal')[0 : 6])
+  Select('', 'change.txt')
+  Pair(['PICK OLDER'], ['PICK NORMAL'])
+  HistoricalIds([Ref('picker-older')], [Ref('picker-normal')])
+  # User defaults must not turn a query or an expected key into a revision.
+  $FZF_DEFAULT_OPTS = '--print-query --expect=enter --multi --filter=PICK_OLDER'
+  DiffviewCommit
+  WaitPicker()
+  Select('', 'change.txt')
+  Pair(['PICK ROOT'], ['PICK OLDER'])
+  assert_equal(layout, g:fzf_layout, 'core layout preference is preserved')
+  assert_equal(['UNSAVED picker user buffer'], getbufline(userbuf, 1, '$'))
+  assert_true(getbufvar(userbuf, '&modified'))
+  for path in ['FZF_INJECTED', 'FZF_AUTHOR_INJECTED', '../FZF_INJECTED', '../FZF_AUTHOR_INJECTED']
+    assert_false(filereadable(path), 'metadata is never executed')
+  endfor
+  writefile([json_encode({scope: 'real core+binary filtered execution; not terminal UI',
+    path_binary: exepath('fzf'), core_binary: fzf#exec(), layout: g:fzf_layout})],
+    test_tmp .. '/picker-real.facts.json')
+  DiffviewClose
+  assert_true(getbufvar(userbuf, '&modified'))
+enddef
+
+def PickerNoMatch()
+  execute 'cd ' .. fnameescape(test_tmp .. '/picker repo 中文')
+  edit change.txt
+  setline(1, ['UNSAVED no-match user'])
+  var userbuf = bufnr()
+  execute 'NERDTree ' .. fnameescape(getcwd())
+  var usertreebuf = bufnr()
+  var usertreewin = win_getid()
+  var usertree = UserTreeState(usertreebuf, usertreewin)
+  DiffviewCommit HEAD
+  Select('', 'change.txt')
+  Pair(['PICK NORMAL'], ['PICK TIP'])
+  win_gotoid(Role('left').winid)
+  SeedRegisters()
+  var state = ComparisonState()
+  PickerFilter('NO_COMMIT_MATCH_0f962372')
+  assert_equal(state, ComparisonState(), 'real fzf no match preserves the prior view and caller focus')
+  assert_equal(usertree, UserTreeState(usertreebuf, usertreewin), 'picker leaves ordinary NERDTree untouched')
+  assert_equal(['UNSAVED no-match user'], getbufline(userbuf, 1, '$'))
+  assert_true(getbufvar(userbuf, '&modified'))
+  DiffviewClose
+enddef
+
+def PickerEnew()
+  execute 'cd ' .. fnameescape(test_tmp .. '/picker repo 中文')
+  edit change.txt
+  setline(1, ['UNSAVED enew picker user'])
+  set nohidden noautowrite autowriteall
+  var userbuf = bufnr()
+  var origin = win_getid()
+  var disk = readfile('change.txt', 'b')
+  var options = [&hidden, &autowrite, &autowriteall]
+  DiffviewCommit HEAD
+  Select('', 'change.txt')
+  win_gotoid(origin)
+  SeedRegisters()
+  var state = ComparisonState()
+  g:fzf_layout = {window: 'enew'}
+  PickerFilter('NO_COMMIT_MATCH_0f962372')
+  assert_equal(state, ComparisonState(), 'in-place no match restores caller and old view')
+  assert_equal(options, [&hidden, &autowrite, &autowriteall])
+  assert_equal(disk, readfile('change.txt', 'b'), 'in-place picker never autosaves dirty caller')
+  assert_equal(['UNSAVED enew picker user'], getbufline(userbuf, 1, '$'))
+  assert_true(getbufvar(userbuf, '&modified'))
+  PickerFilter('PICK_OLDER')
+  Select('', 'change.txt')
+  Pair(['PICK ROOT'], ['PICK OLDER'])
+  assert_equal(options, [&hidden, &autowrite, &autowriteall])
+  assert_equal(disk, readfile('change.txt', 'b'))
+  assert_true(getbufvar(userbuf, '&modified'))
+  win_gotoid(origin)
+  state = ComparisonState()
+  # Real core executes this user layout before it starts its terminal job.
+  g:fzf_layout = {window: 'enew | throw "fixture picker layout failure"'}
+  Reject('DiffviewCommit')
+  WaitPicker()
+  assert_equal(state, ComparisonState(), 'real layout initialization error preserves old view and caller')
+  assert_equal(options, [&hidden, &autowrite, &autowriteall])
+  assert_equal(disk, readfile('change.txt', 'b'))
+  assert_equal(['UNSAVED enew picker user'], getbufline(userbuf, 1, '$'))
+  assert_true(getbufvar(userbuf, '&modified'))
+  DiffviewClose
+enddef
+
+def PickerSha256()
+  execute 'cd ' .. fnameescape(test_tmp .. '/picker-sha256')
+  assert_equal(64, strlen(Ref('picker256-older')))
+  var calls = len(PickerGitCalls())
+  PickerFilter('PICK_OLDER')
+  Select('', 'change.txt')
+  Pair(['PICK ROOT'], ['PICK OLDER'])
+  HistoricalIds([Ref('picker256-root')], [Ref('picker256-older')])
+  PickerOidUsed(Ref('picker256-older'), calls)
+  calls = len(PickerGitCalls())
+  DiffviewRefresh
+  PickerOidUsed(Ref('picker256-older'), calls)
+  Pair(['PICK ROOT'], ['PICK OLDER'])
+  DiffviewClose
+enddef
+
+def PickerMissing()
+  execute 'cd ' .. fnameescape(test_tmp .. '/picker repo 中文')
+  assert_false(exists('*fzf#run'), 'missing-plugin fixture actually omits core fzf')
+  DiffviewOpen
+  Select('Staged', 'change.txt')
+  var state = ComparisonState()
+  Reject('DiffviewCommit')
+  assert_match('\cfzf', execute('messages') .. v:errmsg)
+  assert_match('HEAD', execute('messages') .. v:errmsg, 'dependency error offers explicit HEAD')
+  assert_equal(state, ComparisonState())
+  var saved_path = $PATH
+  try
+    $PATH = test_tmp .. '/no-fzf-bin'
+    assert_false(executable('fzf'), 'missing-binary fixture retains Git but has no PATH fzf')
+    DiffviewCommit HEAD
+    Select('', 'change.txt')
+    Pair(['PICK NORMAL'], ['PICK TIP'])
+    assert_false(exists('*fzf#run'), 'explicit HEAD does not require/loading core fzf')
+    &runtimepath = $FZF_RUNTIME .. ',' .. &runtimepath
+    runtime plugin/fzf.vim
+    assert_true(exists('*fzf#run'))
+    state = ComparisonState()
+    Reject('DiffviewCommit')
+    assert_match('\cfzf', execute('messages') .. v:errmsg)
+    assert_match('HEAD', execute('messages') .. v:errmsg)
+    assert_equal(state, ComparisonState(), 'missing binary preserves the existing comparison')
+    DiffviewCommit HEAD
+    Select('', 'change.txt')
+    Pair(['PICK NORMAL'], ['PICK TIP'])
+  finally
+    $PATH = saved_path
+    DiffviewClose
+  endtry
+enddef
+
+def PickerErrors()
+  execute 'cd ' .. fnameescape(test_tmp .. '/picker repo 中文')
+  DiffviewCommit HEAD
+  Select('', 'change.txt')
+  var state = ComparisonState()
+  $FZF_DEFAULT_OPTS = '--filter=NO_COMMIT_MATCH_0f962372'
+  for directory in ['unborn', 'nonrepo', 'bare.git']
+    execute 'cd ' .. fnameescape(test_tmp .. '/' .. directory)
+    var cwd = getcwd()
+    Reject('DiffviewCommit')
+    WaitPicker()
+    assert_equal(state, ComparisonState(), 'history failure preserves the old view: ' .. directory)
+    assert_equal(cwd, getcwd())
+  endfor
+  execute 'cd ' .. fnameescape(test_tmp .. '/picker repo 中文')
+  try
+    $DIFFVIEW_TEST_FAIL_LOG = '1'
+    Reject('DiffviewCommit')
+    WaitPicker()
+    assert_equal(state, ComparisonState(), 'Git log failure cannot create an empty picker/view')
+  finally
+    $DIFFVIEW_TEST_FAIL_LOG = ''
+    DiffviewClose
+  endtry
+enddef
+
+def PickerRow(query: string): string
+  var rows = g:diffview_test_picker_spec.source
+  assert_equal(v:t_list, type(rows), 'history source is an argv-produced List, not a shell pipeline')
+  var found = filter(copy(rows), (_, row) => stridx(row, query) >= 0)
+  assert_equal(1, len(found), 'one supplied picker row for ' .. query)
+  return found[0]
+enddef
+
+def PickerOutput(lines: list<string>, expect_error = false)
+  messages clear
+  v:errmsg = ''
+  var error = ''
+  var spec = g:diffview_test_picker_spec
+  try
+    # Dispatch exactly like core fzf; this is API injection, not real UI evidence.
+    if has_key(spec, 'sink')
+      var Sink = spec.sink
+      for line in lines
+        call(Sink, [line])
+      endfor
+    endif
+    if has_key(spec, 'sink*')
+      call(spec['sink*'], [lines])
+    elseif has_key(spec, 'sinklist')
+      call(spec.sinklist, [lines])
+    endif
+  catch
+    error = v:exception
+  endtry
+  if expect_error
+    assert_match('\[diffview\]', error .. execute('messages') .. v:errmsg, 'fresh tagged callback error')
+  else
+    assert_equal('', error, 'unexpected callback exception')
+  endif
+enddef
+
+def PickerApi()
+  execute 'cd ' .. fnameescape(test_tmp .. '/picker repo 中文')
+  var repo = getcwd()
+  DiffviewOpen
+  Select('Staged', 'change.txt')
+  Pair(['PICK TIP'], ['INDEX picker dirt'])
+  var state = ComparisonState()
+  DiffviewCommit
+  assert_equal(state, ComparisonState(), 'API capture itself leaves the old view intact')
+  var row = PickerRow('PICK_OLDER')
+  assert_equal(6, len(g:diffview_test_picker_spec.source), 'HEAD reachable history includes merged side, not hidden branch')
+  PickerRow('PICK_SIDE')
+  assert_equal([], filter(copy(g:diffview_test_picker_spec.source), (_, line) => stridx(line, 'PICK_UNREACHABLE') >= 0))
+  assert_true(stridx(row, 'META_AUTHOR_NEEDLE') >= 0 && stridx(row, '2023') >= 0)
+  assert_false(stridx(row, "TABBEFORE\tTABAFTER") >= 0, 'metadata tab is escaped independently of column delimiters')
+  for code in [1, 7, 10, 13, 27]
+    assert_true(stridx(row, nr2char(code)) < 0, 'metadata control bytes are escaped')
+  endfor
+  try
+    execute 'cd ' .. fnameescape(test_tmp .. '/picker-elsewhere')
+    var cwd = getcwd()
+    writefile([Ref('picker-root')], repo .. '/.git/refs/heads/main')
+    var calls = len(PickerGitCalls())
+    PickerOutput([row])
+    Select('', 'change.txt')
+    Pair(['PICK ROOT'], ['PICK OLDER'])
+    assert_equal(repo, getbufvar(Role('panel').bufnr, 'NERDTree').root.path.str(), 'callback stays in the launch repository')
+    assert_equal(cwd, getcwd(), 'callback does not permanently change the newer cwd')
+    PickerOidUsed(Ref('picker-older'), calls)
+    var picker_calls = g:diffview_test_picker_calls
+    calls = len(PickerGitCalls())
+    DiffviewRefresh
+    Pair(['PICK ROOT'], ['PICK OLDER'])
+    PickerOidUsed(Ref('picker-older'), calls)
+    assert_equal(picker_calls, g:diffview_test_picker_calls, 'refresh never reopens picker')
+  finally
+    writefile([Ref('picker-tip')], repo .. '/.git/refs/heads/main')
+    DiffviewClose
+  endtry
+  execute 'cd ' .. fnameescape(repo)
+  DiffviewOpen
+  Select('Staged', 'change.txt')
+  DiffviewCommit
+  row = PickerRow('PICK_OLDER')
+  state = ComparisonState()
+  PickerOutput([])
+  assert_equal(state, ComparisonState(), 'empty callback leaves the view intact')
+  for output in [['not a supplied row'], [row, row], ['typed query', row], ['ctrl-x', row],
+      [row .. ' tampered'], [Ref('picker-hidden') .. ' forged metadata']]
+    PickerOutput(output, true)
+    assert_equal(state, ComparisonState(), 'unexpected/multiple picker output is not a commit request')
+  endfor
+  try
+    g:diffview_test_picker_throw = 1
+    Reject('DiffviewCommit')
+    assert_equal(state, ComparisonState(), 'fzf API launch failure preserves the view')
+  finally
+    g:diffview_test_picker_throw = 0
+  endtry
+  var oid = Ref('picker-older')
+  var object = repo .. '/.git/objects/' .. oid[0 : 1] .. '/' .. oid[2 : ]
+  try
+    assert_equal(0, rename(object, test_tmp .. '/picker-object'))
+    PickerOutput([row], true)
+    assert_equal(state, ComparisonState(), 'selected commit read failure preserves the old view')
+  finally
+    assert_equal(0, rename(test_tmp .. '/picker-object', object))
+  endtry
+  augroup DiffviewPickerFailure
+    autocmd FileType nerdtree throw 'fixture picker selected-view render failure'
+  augroup END
+  try
+    PickerOutput([row], true)
+  finally
+    augroup DiffviewPickerFailure
+      autocmd!
+    augroup END
+  endtry
+  assert_equal(state, ComparisonState(), 'selected comparison render error preserves old buffers and focus')
+  PickerOutput([row])
+  Select('', 'change.txt')
+  Pair(['PICK ROOT'], ['PICK OLDER'])
+  DiffviewClose
+enddef
+
 try
   assert_true(has('vim9script'))
   assert_true(has('diff'))
@@ -1433,6 +1788,19 @@ try
     endif
     runtime plugin/NERD_tree.vim
     assert_equal(2, exists(':NERDTree'), 'real NERDTree commands are loaded')
+  endif
+  if case_name =~ '^picker_' && case_name != 'picker_missing'
+    if case_name == 'picker_api'
+      &runtimepath = harness_root .. '/tests/picker-api,' .. &runtimepath
+      runtime autoload/fzf.vim
+    else
+      &runtimepath = $FZF_RUNTIME .. ',' .. &runtimepath
+      runtime plugin/fzf.vim
+      assert_true(has('terminal'), 'filtered core integration uses a real Vim terminal job')
+    endif
+  endif
+  if case_name =~ '^picker_'
+    g:fzf_layout = {down: 8}
   endif
   runtime plugin/main.vim
   if exists(':DiffviewOpen') != 2
@@ -1493,6 +1861,20 @@ try
     Dependency()
   elseif case_name == 'tree_rollback'
     TreeRollback()
+  elseif case_name == 'picker_real'
+    PickerReal()
+  elseif case_name == 'picker_no_match'
+    PickerNoMatch()
+  elseif case_name == 'picker_enew'
+    PickerEnew()
+  elseif case_name == 'picker_sha256'
+    PickerSha256()
+  elseif case_name == 'picker_missing'
+    PickerMissing()
+  elseif case_name == 'picker_errors'
+    PickerErrors()
+  elseif case_name == 'picker_api'
+    PickerApi()
   else
     throw 'Unknown test case: ' .. case_name
   endif
