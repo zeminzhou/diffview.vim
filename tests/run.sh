@@ -187,6 +187,25 @@ mkdir "$test_tmp/git-bin"
 mkdir "$test_tmp/no-fzf-bin"
 ln -s "$DIFFVIEW_TEST_REAL_GIT" "$test_tmp/no-fzf-bin/git"
 ln -s /bin/sh "$test_tmp/no-fzf-bin/sh"
+mkdir -p "$test_tmp/old-fzf-core/plugin" "$test_tmp/old-fzf-bin"
+# Unmodified real core without a bundled binary; never touch the user's checkout.
+cp "$FZF_RUNTIME/plugin/fzf.vim" "$test_tmp/old-fzf-core/plugin/fzf.vim"
+cat > "$test_tmp/old-fzf-bin/fzf" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = --version ]; then
+    printf 'version\n' >> "$DIFFVIEW_TEST_TMP/picker-old-version.calls"
+    printf '0.1.0 fixture\n'
+    exit 0
+fi
+printf 'unexpected picker execution\n' > "$DIFFVIEW_TEST_TMP/picker-old-executed"
+exit 86
+EOF
+cat > "$test_tmp/old-fzf-core/install" <<'EOF'
+#!/bin/sh
+printf 'unexpected installer execution\n' > "$DIFFVIEW_TEST_TMP/picker-old-install"
+exit 86
+EOF
+chmod +x "$test_tmp/old-fzf-bin/fzf" "$test_tmp/old-fzf-core/install"
 cat > "$test_tmp/git-bin/git" <<'EOF'
 #!/bin/sh
 printf '%s\000' "$@" >> "$DIFFVIEW_TEST_GIT_LOG"
@@ -207,7 +226,7 @@ suite_failed=0
 test_cases='local clean unborn nonrepo special refresh lifecycle ownership ancestor
     trees commits historical_refresh errors exclusions edges cross_tab read_failure navigation
     binary_clean binary_mixed large empty_start tree_nodes tree_history tree_isolation dependency tree_rollback
-    picker_real picker_no_match picker_enew picker_sha256 picker_missing picker_errors picker_api'
+    picker_real picker_no_match picker_enew picker_sha256 picker_missing picker_old_binary picker_errors picker_api'
 if [ -n "${NERDTREE_GIT_RUNTIME:-}" ]; then
     test_cases="$test_cases tree_git"
 else

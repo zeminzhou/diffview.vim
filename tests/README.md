@@ -1,6 +1,6 @@
 # Acceptance tests
 
-The suite retains all 28 source/safety and NERDTree scenarios, adds seven commit
+The suite retains all 28 source/safety and NERDTree scenarios, adds eight commit
 picker cases, and compares all 23 fixture repositories/directories byte for byte,
 including indexes and object databases, before and after browsing.
 
@@ -117,6 +117,7 @@ Additional scenarios:
 | picker_enew | Real in-place core layout with nohidden/autowriteall: selection, no match and initialization failure preserve dirty bytes/modified state, options and the old usable view |
 | picker_sha256 | Real core/binary selection and refresh retain the full 64-character commit identity and actual bodies |
 | picker_missing | Missing core plugin/binary give errors and preserve the comparison; explicit HEAD works with neither dependency |
+| picker_old_binary | Unmodified real core with an incompatible version-reporting binary fixture rejects without consuming input or running an installer/picker; explicit HEAD remains usable |
 | picker_errors | Unborn, non-Git, bare and injected Git history failure report errors without replacing the old view |
 | picker_api | Public fzf callback boundary only: original repository/full OID after cwd/ref changes; malformed, duplicate and forged rows, launch/read/render errors and immutable refresh |
 
@@ -127,6 +128,9 @@ setting intentional per-case defaults. Actual filtered core/binary execution
 is separate from the callback fixture under `picker-api/`, which only captures
 the public supplied spec and dispatches its sink. Neither is terminal UI evidence:
 search/Enter, Esc and Ctrl-C must also be exercised in a real terminal.
+The incompatible-binary case copies the real core file into a private temporary
+runtime without its bundled executable. Its version-only binary and installer
+sentinel exercise dependency rejection, not successful execution of an old fzf.
 
 The coexistence case drains jobs and channel-close callbacks after native tree
 creation, mirroring and buffer entry before recording its baseline. It then

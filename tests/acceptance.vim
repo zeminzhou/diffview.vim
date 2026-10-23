@@ -1639,6 +1639,41 @@ def PickerErrors()
   endtry
 enddef
 
+def PickerOldBinary()
+  execute 'cd ' .. fnameescape(test_tmp .. '/picker repo 中文')
+  edit change.txt
+  setline(1, ['UNSAVED incompatible binary user'])
+  var userbuf = bufnr()
+  set nohidden autowriteall
+  DiffviewCommit HEAD
+  Select('', 'change.txt')
+  var state = ComparisonState()
+  var saved_path = $PATH
+  try
+    $PATH = test_tmp .. '/old-fzf-bin:' .. test_tmp .. '/no-fzf-bin'
+    assert_true(executable('fzf'), 'old-binary dependency probe has an executable')
+    assert_equal(0, getchar(1))
+    # A forbidden input() consumes this safe refusal; never consent to a download.
+    feedkeys("n\<CR>", 'nt')
+    Reject('DiffviewCommit')
+    assert_equal(char2nr('n'), getchar(0), 'dependency check must not prompt')
+    assert_equal(13, getchar(0), 'dependency check leaves typeahead intact')
+    assert_match('\cfzf', execute('messages') .. v:errmsg)
+    assert_equal(state, ComparisonState(), 'incompatible binary preserves the old view')
+    assert_true(filereadable(test_tmp .. '/picker-old-version.calls'), 'version was actually checked')
+    assert_false(filereadable(test_tmp .. '/picker-old-executed'))
+    assert_false(filereadable(test_tmp .. '/picker-old-install'))
+    DiffviewCommit HEAD
+    Select('', 'change.txt')
+    Pair(['PICK NORMAL'], ['PICK TIP'])
+    assert_equal(['UNSAVED incompatible binary user'], getbufline(userbuf, 1, '$'))
+    assert_true(getbufvar(userbuf, '&modified'))
+  finally
+    $PATH = saved_path
+    DiffviewClose
+  endtry
+enddef
+
 def PickerRow(query: string): string
   var rows = g:diffview_test_picker_spec.source
   assert_equal(v:t_list, type(rows), 'history source is an argv-produced List, not a shell pipeline')
@@ -1793,6 +1828,9 @@ try
     if case_name == 'picker_api'
       &runtimepath = harness_root .. '/tests/picker-api,' .. &runtimepath
       runtime autoload/fzf.vim
+    elseif case_name == 'picker_old_binary'
+      &runtimepath = test_tmp .. '/old-fzf-core,' .. &runtimepath
+      runtime plugin/fzf.vim
     else
       &runtimepath = $FZF_RUNTIME .. ',' .. &runtimepath
       runtime plugin/fzf.vim
@@ -1871,6 +1909,8 @@ try
     PickerSha256()
   elseif case_name == 'picker_missing'
     PickerMissing()
+  elseif case_name == 'picker_old_binary'
+    PickerOldBinary()
   elseif case_name == 'picker_errors'
     PickerErrors()
   elseif case_name == 'picker_api'
