@@ -1,6 +1,6 @@
 # Acceptance tests
 
-The suite retains all 28 source/safety and NERDTree scenarios, adds eight commit
+The suite retains all 28 source/safety and NERDTree scenarios, adds nine commit
 picker cases, and compares all 23 fixture repositories/directories byte for byte,
 including indexes and object databases, before and after browsing.
 
@@ -115,6 +115,7 @@ Additional scenarios:
 | picker_real | Real core/binary filtered selection by subject, author and short hash; reachable side history, root/merge semantics, metadata punctuation, fixed full-OID refresh and dirty-buffer protection |
 | picker_no_match | Real core/binary no match preserves caller focus, old comparison, registers, dirty buffer and an ordinary NERDTree |
 | picker_enew | Real in-place core layout with nohidden/autowrite/autowriteall: observed caller-window reuse, selection, no match, binary-generated abort and initialization failure preserve dirty bytes/modified state, options and the old usable view |
+| picker_async | Real core terminal job: change caller tcd while the enew picker runs, wait for the typed query and unique match before Enter; preserve the latest path AND tab-local scope, original repo/full OID, fixed refresh and dirty bytes |
 | picker_sha256 | Real core/binary selection and refresh retain the full 64-character commit identity and actual bodies |
 | picker_missing | Missing core plugin/binary give errors and preserve the comparison; explicit HEAD works with neither dependency |
 | picker_old_binary | Unmodified real core with an incompatible version-reporting binary fixture rejects without consuming input or running an installer/picker; explicit HEAD remains usable |
@@ -129,6 +130,9 @@ is separate from the callback fixture under `picker-api/`, which retains real
 core wrap/exec and only intercepts run to capture the public spec and dispatch its
 sink/exit callbacks, including invalid types and exit codes. Neither is terminal UI evidence:
 search/Enter, Esc and Ctrl-C must also be exercised in a real terminal.
+The asynchronous actor case uses `term_sendkeys` with an observed query and
+settled result count before Enter. It is real core/binary execution in headless
+Vim, separate from both callback injection and the outer terminal checklist.
 The incompatible-binary case copies the real core file into a private temporary
 runtime without its bundled executable. Its version-only binary and installer
 sentinel exercise dependency rejection, not successful execution of an old fzf.

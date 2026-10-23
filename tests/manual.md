@@ -93,6 +93,7 @@ author/subject metadata; preserve complete repository bytes before browsing.
 | From the dirty caller and from a comparison pane, reopen and press Esc; repeat with Ctrl-C | Picker UI disappears; caller focus, old comparison, dirty contents/modified flag, registers and ordinary tree survive |
 | Search for an absent string, then cancel | No comparison replacement or empty view; subsequent selection still works |
 | Repeat selection/cancellation with g:fzf_layout set to {window: 'enew'} | Respect the in-place layout without autosaving; restore hidden/autowrite/autowriteall and original dirty buffer |
+| While the enew picker runs, change the caller's tab directory with tcd to another disposable repository, then resume input and select the older commit | Keep the new user path and tab-local scope=2, while selected contents/full OID remain bound to the original repository; Refresh does not reopen the picker |
 | Close/reopen, use pane/tree mappings and return to the ordinary tree | No orphan terminal/window/buffer; both interfaces remain usable |
 
 Record each actual selection and cancellation, dimensions, focus/layout and

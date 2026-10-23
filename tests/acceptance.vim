@@ -1604,6 +1604,86 @@ def PickerEnew()
   DiffviewClose
 enddef
 
+def PickerAsync()
+  execute 'cd ' .. fnameescape(test_tmp .. '/picker repo 中文')
+  var repo = getcwd()
+  var elsewhere = resolve(test_tmp .. '/picker-elsewhere')
+  edit change.txt
+  setline(1, ['UNSAVED asynchronous picker user'])
+  set nohidden autowrite autowriteall
+  var userbuf = bufnr()
+  var origin = win_getid()
+  var disk = readfile(repo .. '/change.txt', 'b')
+  var options = [&hidden, &autowrite, &autowriteall]
+  var caller_options = WindowOptions(origin)
+  DiffviewCommit HEAD
+  Select('', 'change.txt')
+  win_gotoid(origin)
+  g:fzf_layout = {window: 'enew'}
+  $FZF_DEFAULT_OPTS = ''
+  var calls = len(PickerGitCalls())
+  DiffviewCommit
+  var terminals = getbufinfo()->filter((_, b) => getbufvar(b.bufnr, '&filetype') == 'fzf')
+  if len(terminals) != 1
+    throw 'Expected one real asynchronous fzf terminal'
+  endif
+  var picker = terminals[0].bufnr
+  assert_equal(origin, win_getid(), 'async actor operates in the original enew caller window')
+  assert_equal(picker, bufnr())
+  execute 'tcd ' .. fnameescape(elsewhere)
+  var expected_cwd = [getcwd(), getcwd(-1), haslocaldir()]
+  assert_equal(2, expected_cwd[2], 'actor really establishes a new tab-local directory')
+  term_wait(picker, 100)
+  term_sendkeys(picker, 'PICK_OLDER')
+  var stable = 0
+  var started = reltime()
+  var screen: list<string> = []
+  while stable < 2 && reltimefloat(reltime(started)) < 5.0
+    term_wait(picker, 20)
+    screen = mapnew(range(1, term_getsize(picker)[0]), (_, row) => term_getline(picker, row))
+    var query_seen = !empty(filter(copy(screen), (_, line) => line =~ 'PICK_OLDER\s*$'))
+    var one_match = !empty(filter(copy(screen), (_, line) => line =~ '\<1/6\>'))
+    stable = query_seen && one_match ? stable + 1 : 0
+  endwhile
+  writefile(screen, test_tmp .. '/picker-async.screen')
+  if stable < 2
+    throw 'Typed fzf query and unique result did not settle before Enter'
+  endif
+  term_sendkeys(picker, "\<CR>")
+  WaitPicker()
+  Select('', 'change.txt')
+  Pair(['PICK ROOT'], ['PICK OLDER'])
+  HistoricalIds([Ref('picker-root')], [Ref('picker-older')])
+  PickerOidUsed(Ref('picker-older'), calls)
+  var model_root = getbufvar(Role('panel').bufnr, 'NERDTree').root.path.str()
+  assert_equal(resolve(repo), resolve(model_root), 'real async selection remains bound to the launch repository')
+  var location = win_id2tabwin(origin)
+  var actual_cwd = [getcwd(location[1], location[0]), getcwd(-1), haslocaldir(location[1], location[0])]
+  assert_equal(expected_cwd, actual_cwd, 'selection preserves latest caller path AND tab-local scope')
+  assert_equal(expected_cwd[0 : 1], [getcwd(), getcwd(-1)], 'selection preserves latest current/global paths')
+  assert_equal(options, [&hidden, &autowrite, &autowriteall])
+  assert_equal(caller_options, WindowOptions(origin))
+  calls = len(PickerGitCalls())
+  DiffviewRefresh
+  WaitPicker()
+  Pair(['PICK ROOT'], ['PICK OLDER'])
+  PickerOidUsed(Ref('picker-older'), calls)
+  assert_equal([], filter(PickerGitCalls()[calls : ], (_, line) => index(split(line, "\n", true), 'log') >= 0),
+    'refresh reuses the full selected OID without loading picker history')
+  DiffviewClose
+  assert_true(win_gotoid(origin))
+  assert_equal(userbuf, bufnr())
+  assert_equal([elsewhere, 2], [getcwd(), haslocaldir()], 'close preserves the latest tab-local directory too')
+  assert_equal(['UNSAVED asynchronous picker user'], getbufline(userbuf, 1, '$'))
+  assert_true(&modified)
+  assert_equal(disk, readfile(repo .. '/change.txt', 'b'))
+  writefile([json_encode({scope: 'real core/binary term_sendkeys; headless, not outer PTY',
+    before_exit: expected_cwd, caller_after_selection: actual_cwd, model_root: model_root,
+    stable_query_ticks: stable, selected_oid: Ref('picker-older'), core_binary: fzf#exec()})],
+    test_tmp .. '/picker-async.facts.json')
+  execute 'cd ' .. fnameescape(repo)
+enddef
+
 def PickerSha256()
   execute 'cd ' .. fnameescape(test_tmp .. '/picker-sha256')
   assert_equal(64, strlen(Ref('picker256-older')))
@@ -1958,6 +2038,8 @@ try
     PickerNoMatch()
   elseif case_name == 'picker_enew'
     PickerEnew()
+  elseif case_name == 'picker_async'
+    PickerAsync()
   elseif case_name == 'picker_sha256'
     PickerSha256()
   elseif case_name == 'picker_missing'

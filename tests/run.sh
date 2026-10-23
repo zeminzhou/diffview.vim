@@ -226,7 +226,7 @@ suite_failed=0
 test_cases='local clean unborn nonrepo special refresh lifecycle ownership ancestor
     trees commits historical_refresh errors exclusions edges cross_tab read_failure navigation
     binary_clean binary_mixed large empty_start tree_nodes tree_history tree_isolation dependency tree_rollback
-    picker_real picker_no_match picker_enew picker_sha256 picker_missing picker_old_binary picker_errors picker_api'
+    picker_real picker_no_match picker_enew picker_async picker_sha256 picker_missing picker_old_binary picker_errors picker_api'
 if [ -n "${NERDTREE_GIT_RUNTIME:-}" ]; then
     test_cases="$test_cases tree_git"
 else
@@ -246,6 +246,9 @@ for test_case in $test_cases; do
         fi
         if [ "$test_case" = picker_enew ]; then
             cat "$test_tmp/picker-enew.facts.json"
+        fi
+        if [ "$test_case" = picker_async ]; then
+            cat "$test_tmp/picker-async.facts.json"
         fi
     else
         if [ ! -f "$test_tmp/$test_case.result" ]; then
