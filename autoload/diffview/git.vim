@@ -71,6 +71,22 @@ export def Root(): string
     return Text(Run(cwd, ['rev-parse', '--show-toplevel']))
 enddef
 
+export def Commits(root: string): list<string>
+    var records = NulFields(Run(root, ['log', '-z', '--no-color', '--no-notes',
+        '--no-show-signature', '--encoding=UTF-8', '--date=short', '--abbrev=12',
+        '--format=%H%x09%h %ad %an %s', 'HEAD', '--']))
+    var source: list<string> = []
+    for record in records
+        var separator = stridx(record, "\t")
+        var oid = strpart(record, 0, separator)
+        if separator < 0 || oid !~ '^\x\+$' || index([40, 64], strlen(oid)) < 0
+            throw '[diffview] Malformed Git commit history.'
+        endif
+        add(source, oid .. "\t" .. diffview#git#Display(strpart(record, separator + 1)))
+    endfor
+    return source
+enddef
+
 def DiffEntries(root: string, args: list<string>, section: string, rootCommit = false): list<dict<any>>
     # numstat filters stat-only raw records without refreshing the index.
     var command = rootCommit ? ['diff-tree', '--root', '--no-commit-id', '-r'] : ['diff']

@@ -31,6 +31,7 @@ mode and identify the source on each side.
 | Vim | Vim 9.1 with `+vim9script`, `+diff`, `+windows`, `+job` and `+timers` |
 | Git | Available as `git` on Vim's `PATH` |
 | NERDTree | [preservim/nerdtree](https://github.com/preservim/nerdtree), formerly `scrooloose/nerdtree`, installed and loaded |
+| fzf (optional) | Core `junegunn/fzf` integration and PATH binary, only for commit search |
 
 Verified with Vim **9.1.1950**, Git **2.54.0**, and NERDTree revision
 [`690d061`](https://github.com/preservim/nerdtree/commit/690d061b591525890f1471c6675bcb5bdc8cdff9)
@@ -118,7 +119,8 @@ Diffview does not save, reload or discard your user buffers.
 | --- | --- |
 | `:DiffviewOpen` | Local changes in separate Staged, Unstaged and Untracked sections |
 | `:DiffviewOpen {left} {right}` | The specified left tree → right tree |
-| `:DiffviewCommit [revision]` | First parent → commit; defaults to `HEAD` |
+| `:DiffviewCommit` | Search HEAD history with fzf, then first parent → selected commit |
+| `:DiffviewCommit {revision}` | First parent → specified commit; no fzf required |
 | `:DiffviewRefresh` | Re-read the original repository and comparison request |
 | `:DiffviewClose` | Close the active view and clean up its resources |
 
@@ -177,17 +179,42 @@ as `HEAD^` are valid when the parent exists.
 
 ```vim
 :DiffviewCommit
+:DiffviewCommit HEAD
 :DiffviewCommit HEAD~1
 ```
 
-With no argument, inspect `HEAD`. With an argument, inspect that commit's
-changes relative to its **first parent**. A merge commit uses its first parent;
-a root commit uses `EMPTY` on the left. A missing parent object in shallow or
-incomplete history produces an error rather than a false root comparison.
+With no argument, search all commits reachable from the current repository's
+`HEAD`, including merged history. Rows show a short commit ID, date, author and
+subject. Type to search, press Enter to select one commit, or Esc / Ctrl-C to
+cancel. Selecting opens the usual **first parent → commit** comparison; a merge
+commit uses its first parent and a root commit uses `EMPTY` on the left. A
+missing parent in shallow or incomplete history produces an error.
 
-`DiffviewCommit` accepts zero or one argument resolving to a commit. The source
-labels show the requested revisions and resolved short object IDs. Branches
-and other refs remain fixed until an explicit refresh resolves them again.
+Commit search optionally requires the core
+[junegunn/fzf](https://github.com/junegunn/fzf) Vim integration and an `fzf` binary
+on `PATH`; the separate `fzf.vim` plugin is not required. For vim-plug, add
+`Plug 'junegunn/fzf'` alongside the existing plugins and install the binary with
+your package manager. For native packages, install the core checkout under your
+Vim package directory and install the binary separately. Diffview never downloads
+dependencies. Search is verified with core fzf `b412a45` and binary **0.67.0**;
+other versions remain unverified. The picker uses core fzf's normal layout
+preferences.
+
+An explicit revision bypasses fzf. Use `:DiffviewCommit HEAD` for the former
+no-argument behavior, or `:DiffviewCommit HEAD~1` to inspect an older commit
+directly. Exactly zero or one argument is accepted.
+
+A picked commit stays bound to its original repository and full object ID.
+Refresh reuses that immutable ID and does not reopen the picker, even if cwd or
+refs change. Explicit named revisions retain their existing behavior: refresh
+resolves the original name again. Source labels show the requested revision or
+picked object ID and resolved short IDs. Cancellation, no match and errors retain
+the old usable comparison and unsaved buffers. Controls in metadata are escaped
+for display and never used as commands.
+
+History loading runs synchronously before fzf appears, so large histories can
+pause Vim. Unique commits on other branches, reflogs and file-specific history
+are outside this search.
 
 ## Reading the file tree
 
@@ -320,9 +347,10 @@ are excluded. Check the selected Staged/Unstaged section and the source labels,
 save the file yourself if desired, then refresh. An unchanged file will not
 appear in the changed-path tree.
 
-**A ref changed but the comparison did not.** Run `:DiffviewRefresh`. Historical
-endpoints are resolved when opening and again on refresh, not on every cursor
-movement.
+**A ref changed but the comparison did not.** Run `:DiffviewRefresh`. Explicitly
+named historical endpoints are resolved when opening and again on refresh,
+not on every cursor movement. A commit picked with fzf keeps its full object ID;
+run `DiffviewCommit` again to choose another commit.
 
 **Long labels or the unsaved-edits notice are clipped.** Widen the focused pane
 with `:vertical resize 60` or Vim's window-resizing keys. Pane widths are fixed
@@ -346,21 +374,28 @@ git clone https://github.com/preservim/nerdtree.git "$deps/nerdtree"
 git -C "$deps/nerdtree" checkout 690d061b591525890f1471c6675bcb5bdc8cdff9
 git clone https://github.com/Xuyuanp/nerdtree-git-plugin.git "$deps/nerdtree-git-plugin"
 git -C "$deps/nerdtree-git-plugin" checkout e1fe727127a813095854a5b063c15e955a77eafb
+git clone https://github.com/junegunn/fzf.git "$deps/fzf"
+git -C "$deps/fzf" checkout b412a450538e5f4a1d7057732e75d945dafa18a6
+# Install the fzf binary separately with your package manager (verified: 0.67.0).
 
 # Developer smoke checks: Python 3 standard library, real Vim and Git.
 NERDTREE_RUNTIME="$deps/nerdtree" python3 dev/check.py
 
+# Add real fzf smoke and a separate injected-callback boundary probe.
+NERDTREE_RUNTIME="$deps/nerdtree" FZF_RUNTIME="$deps/fzf" python3 dev/check.py
+
 # Full acceptance suite, including real git-plugin coexistence.
 NERDTREE_RUNTIME="$deps/nerdtree" \
-NERDTREE_GIT_RUNTIME="$deps/nerdtree-git-plugin" sh tests/run.sh
+NERDTREE_GIT_RUNTIME="$deps/nerdtree-git-plugin" \
+FZF_RUNTIME="$deps/fzf" sh tests/run.sh
 ```
 
-The full suite contains **28 scenarios** covering comparison sources, tree
-identity/navigation, special paths, dependency and render failures, user-tree
-isolation, lifecycle and binary/index regressions. It compares complete fixture
-contents, including Git indexes and object databases. Omitting
+The suite retains the original 28 comparison/tree/safety scenarios. Picker
+coverage checks commit sources, original-repository binding, cancellation and
+malformed output separately from real terminal interaction. It compares complete
+fixture contents, including Git indexes and object databases. Omitting
 `NERDTREE_GIT_RUNTIME` explicitly reports the coexistence case as `NOT RUN`;
-provide both dependencies for a complete run. The runner supports `VIM` and
+provide all three dependencies for a complete run. The runner supports `VIM` and
 `DIFFVIEW_TEST_RUNTIME` overrides; see [tests/README.md](tests/README.md).
 
 Interactive acceptance also covers real terminal keys, pane focus, hunk

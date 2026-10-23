@@ -277,7 +277,7 @@ export def Refresh()
     endtry
 enddef
 
-export def Open(args: list<string>, commit = false)
+export def Open(args: list<string>, commit = false, root = '')
     var creating = false
     var previous: dict<any> = {}
     var previousFocus = 0
@@ -288,7 +288,7 @@ export def Open(args: list<string>, commit = false)
             throw '[diffview] Usage: DiffviewOpen [left right]'
         endif
         tree.Check()
-        var model = git.Comparison(git.Root(), args, commit)
+        var model = git.Comparison(root == '' ? git.Root() : root, args, commit)
         var candidate = tree.Build(model)
         var content = empty(model.entries) ? {} : git.Read(model, model.entries[0])
         var origin = empty(view) ? win_getid() : view.origin
@@ -339,6 +339,85 @@ export def Open(args: list<string>, commit = false)
             g:diffview_enabled = !empty(view)
             win_gotoid(previousFocus)
         endif
+    endtry
+enddef
+
+def SelectedCommit(root: string, source: list<string>, lines: any)
+    if type(lines) != v:t_list
+        Error('Invalid fzf commit selection.')
+        return
+    elseif empty(lines)
+        return
+    endif
+    if len(lines) != 1 || type(lines[0]) != v:t_string || index(source, lines[0]) < 0
+        Error('Invalid fzf commit selection.')
+        return
+    endif
+    var oid = matchstr(lines[0], '^\x\+\ze\t')
+    if index([40, 64], strlen(oid)) < 0
+        Error('Invalid fzf commit object ID.')
+        return
+    endif
+    var cwd = getcwd(-1)
+    Open([oid], true, root)
+    if getcwd(-1) != cwd
+        # Closing a prior tab can restore the global cwd left by an in-place picker.
+        var local = haslocaldir()
+        var directory = getcwd()
+        execute 'noautocmd cd ' .. fnameescape(cwd)
+        if local != 0
+            execute (local == 1 ? 'noautocmd lcd ' : 'noautocmd tcd ') .. fnameescape(directory)
+        endif
+    endif
+enddef
+
+def PickerExit(code: number)
+    if index([0, 1, 130], code) < 0
+        Error('fzf failed (exit ' .. code .. '). Check :messages and your fzf installation.')
+    endif
+enddef
+
+export def Commit(args: list<string>)
+    if !empty(args)
+        Open(args, true)
+        return
+    endif
+    try
+        tree.Check()
+        if !exists('*fzf#run') || !exists('*fzf#wrap') || !exists('*fzf#exec') || !executable('fzf')
+            throw '[diffview] Install junegunn/fzf and put fzf on PATH, or use DiffviewCommit HEAD.'
+        endif
+        # Do not let the dependency offer to download an incompatible binary.
+        fzf#exec('0.0.0', 1)
+        var root = git.Root()
+        var source = git.Commits(root)
+        if empty(source)
+            throw '[diffview] No commits to select.'
+        endif
+        var picker = fzf#wrap({source: source,
+            sinklist: (lines) => SelectedCommit(root, source, lines), exit: PickerExit,
+            options: ['--no-multi', '--no-print-query', '--no-expect', '--no-print0', '--no-read0',
+                '--accept-nth=..', '--delimiter=\t', '--with-nth=2..', '--nth=..', '--prompt=Commit> ']})
+        var hidden = &hidden
+        var autowrite = &autowrite
+        var autowriteall = &autowriteall
+        var caller = bufnr()
+        var bufferHidden = &l:bufhidden
+        try
+            # An in-place fzf layout must retain the caller without saving it.
+            set hidden noautowrite noautowriteall
+            setbufvar(caller, '&bufhidden', 'hide')
+            fzf#run(picker)
+        finally
+            &hidden = hidden
+            &autowrite = autowrite
+            &autowriteall = autowriteall
+            if bufexists(caller)
+                setbufvar(caller, '&bufhidden', bufferHidden)
+            endif
+        endtry
+    catch
+        Error(v:exception)
     endtry
 enddef
 

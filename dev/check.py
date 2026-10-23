@@ -606,7 +606,7 @@ call win_gotoid(panel)
 call Check('file.txt', ['root'], ['second'])
 DiffviewCommit annotated
 call Check('file.txt', [''], ['root'])
-DiffviewCommit
+DiffviewCommit HEAD
 call assert_equal(1, len(DiffviewEntries()))
 call Check('side file', [''], ['side'])
 DiffBranch left
@@ -627,7 +627,7 @@ DiffviewClose
     shallow = directory / "shallow"
     git(directory, "clone", "-q", "--depth", "1", "--no-local", "file://" + str(history), str(shallow))
     vim(shallow, r'''
-DiffviewCommit
+DiffviewCommit HEAD
 call assert_equal(1, tabpagenr('$'), 'missing parent is an error, not a root commit')
 call assert_match('Git failed', execute('messages'))
 ''', directory)
@@ -647,8 +647,147 @@ let panes = filter(getwininfo(), {_, w -> w.tabnr == tabpagenr()})
 call sort(panes, {a, b -> a.wincol - b.wincol})
 call assert_equal(['root'], getbufline(panes[1].bufnr, 1, '$'))
 call assert_equal(['next'], getbufline(panes[2].bufnr, 1, '$'))
-DiffviewCommit
+DiffviewCommit HEAD
 DiffviewClose
 call assert_equal(1, tabpagenr('$'))
 ''', directory)
+
+    fzf_runtime = os.environ.get("FZF_RUNTIME")
+    if fzf_runtime:
+        if not (Path(fzf_runtime) / "plugin/fzf.vim").is_file():
+            raise SystemExit("FZF_RUNTIME must point to the core junegunn/fzf checkout.")
+        picker = directory / "picker repo"
+        picker.mkdir()
+        git(picker, "init", "-q", "-b", "main")
+        git(picker, "config", "user.name", "Picker 作者 $();|'\tname")
+        git(picker, "config", "user.email", "picker@example.invalid")
+        (picker / "nested").mkdir()
+        (picker / "file").write_text("ROOT\n")
+        git(picker, "add", ".")
+        git(picker, "commit", "-qm", "root-picker-key")
+        root_commit = git(picker, "rev-parse", "HEAD").decode().strip()
+        (picker / "file").write_text("NORMAL\n")
+        git(picker, "commit", "-qam", "normal-picker-key 作者\t\x01\x1b $(touch INJECTED) | 'quote'")
+        normal_commit = git(picker, "rev-parse", "HEAD").decode().strip()
+        git(picker, "checkout", "-qb", "side")
+        (picker / "side").write_text("SIDE\n")
+        git(picker, "add", ".")
+        git(picker, "commit", "-qm", "side-picker-key")
+        git(picker, "checkout", "-q", "main")
+        (picker / "file").write_text("MAIN\n")
+        git(picker, "commit", "-qam", "main-picker-key")
+        git(picker, "merge", "--no-ff", "-qm", "merge-picker-key", "side")
+        merge_commit = git(picker, "rev-parse", "HEAD").decode().strip()
+        before_picker = {str(p.relative_to(picker)): p.read_bytes()
+                         for p in picker.rglob("*") if p.is_file()}
+        vim(picker, "let fzf_runtime = " + quote(fzf_runtime)
+            + "\nlet other_repo = " + quote(repo)
+            + "\nlet root_commit = " + quote(root_commit)
+            + "\nlet normal_commit = " + quote(normal_commit)
+            + "\nlet merge_commit = " + quote(merge_commit) + "\n" + r'''
+function! Role(role)
+  return filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, 'diffview_role', '') == a:role})[0].bufnr
+endfunction
+function! Buffers()
+  return [Role('panel'), Role('left'), Role('right')]
+endfunction
+function! Pair(left, right, oid)
+  call assert_equal(a:left, getbufline(Role('left'), 1, '$'))
+  call assert_equal(a:right, getbufline(Role('right'), 1, '$'))
+  call assert_match(a:oid, getbufvar(Role('right'), 'diffview_source'))
+  call assert_equal('nerdtree', getbufvar(Role('panel'), '&filetype'))
+  for role in ['left', 'right']
+    call assert_true(getbufvar(Role(role), '&readonly'))
+    call assert_false(getbufvar(Role(role), '&modifiable'))
+  endfor
+endfunction
+function! WaitPicker()
+  let started = reltime()
+  let idle = 0
+  while reltimefloat(reltime(started)) < 5
+    sleep 10m
+    if empty(filter(job_info(), {_, job -> job_status(job) == 'run'}))
+        \ && empty(filter(getwininfo(), {_, w -> getbufvar(w.bufnr, '&filetype') == 'fzf'}))
+      let idle += 1
+      if idle == 2 | return | endif
+    else
+      let idle = 0
+    endif
+  endwhile
+  call assert_report('fzf did not finish within 5 seconds')
+endfunction
+set nohidden autowriteall
+edit file
+call setline(1, 'UNSAVED picker buffer')
+let userbuf = bufnr()
+DiffviewCommit HEAD
+let old_buffers = Buffers()
+DiffviewCommit
+call assert_equal(old_buffers, Buffers(), 'missing core fzf preserves explicit HEAD view')
+call assert_match('junegunn/fzf', execute('messages'))
+let &rtp = fzf_runtime . ',' . &rtp
+runtime plugin/fzf.vim
+let $FZF_DEFAULT_OPTS_FILE = ''
+let g:fzf_layout = {'down': '40%'}
+for [query, left, right, oid] in [
+    \ ['normal-picker-key', ['ROOT'], ['NORMAL'], normal_commit],
+    \ [root_commit[0:9], [''], ['ROOT'], root_commit],
+    \ ['merge-picker-key', [''], ['SIDE'], merge_commit]]
+  let $FZF_DEFAULT_OPTS = '--filter=' . query . ' --print-query --expect=ctrl-t --multi --accept-nth=2'
+  DiffviewCommit
+  call WaitPicker()
+  call Pair(left, right, oid)
+  DiffviewRefresh
+  call Pair(left, right, oid)
+  call assert_equal(['UNSAVED picker buffer'], getbufline(userbuf, 1, '$'))
+  call assert_true(getbufvar(userbuf, '&modified'))
+endfor
+DiffviewClose
+setlocal bufhidden=wipe
+let options = [&hidden, &autowrite, &autowriteall]
+let g:fzf_layout = {'window': 'enew'}
+let $FZF_DEFAULT_OPTS = '--filter=root-picker-key'
+DiffviewCommit
+call WaitPicker()
+call Pair([''], ['ROOT'], root_commit)
+call assert_equal(['UNSAVED picker buffer'], getbufline(userbuf, 1, '$'))
+call assert_true(getbufvar(userbuf, '&modified'), 'in-place fzf never autosaves the caller')
+call assert_equal(options, [&hidden, &autowrite, &autowriteall])
+call assert_equal('wipe', getbufvar(userbuf, '&bufhidden'))
+let old_buffers = Buffers()
+let $FZF_DEFAULT_OPTS = '--filter=unmatched-picker-query'
+DiffviewCommit
+call WaitPicker()
+call assert_equal(old_buffers, Buffers(), 'no match preserves existing view')
+call Pair([''], ['ROOT'], root_commit)
+function! fzf#run(spec) abort
+  let g:picker_spec = a:spec
+  let g:picker_calls = get(g:, 'picker_calls', 0) + 1
+endfunction
+DiffviewCommit
+let root_row = filter(copy(g:picker_spec.source), {_, row -> stridx(row, g:root_commit . "\t") == 0})[0]
+execute 'cd ' . fnameescape(other_repo)
+call g:picker_spec.sinklist([root_row])
+call Pair([''], ['ROOT'], root_commit)
+call assert_equal(resolve(other_repo), getcwd(), 'selection retains caller cwd while binding original repository')
+DiffviewRefresh
+call assert_equal(1, g:picker_calls, 'refresh never relaunches fzf')
+call Pair([''], ['ROOT'], root_commit)
+let old_buffers = Buffers()
+for output in [[], ['query', root_row], [root_row, root_row], ['bad selection'], 23, [23]]
+  call g:picker_spec.sinklist(output)
+  call assert_equal(old_buffers, Buffers(), 'malformed output preserves the old view')
+  call Pair([''], ['ROOT'], root_commit)
+endfor
+DiffviewClose
+call assert_equal(['UNSAVED picker buffer'], getbufline(userbuf, 1, '$'))
+call assert_true(getbufvar(userbuf, '&modified'))
+''', directory)
+        after_picker = {str(p.relative_to(picker)): p.read_bytes()
+                        for p in picker.rglob("*") if p.is_file()}
+        assert before_picker == after_picker, "Commit search must preserve every fixture byte"
+        print("PASS: real fzf filtered normal/root/merge, hostile display/defaults, short hash, no match; callback repo/OID binding, malformed output and refresh; dirty buffers and bytes")
+    else:
+        print("NOT RUN: optional fzf picker smoke (set FZF_RUNTIME to its core checkout)")
+
 print("PASS: local sources/safety/lifecycle/paths; trees, root/normal/merge commits, ref refresh, invalid arguments, legacy wrappers; index/object/disk preservation")

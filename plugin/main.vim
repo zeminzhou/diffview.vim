@@ -36,7 +36,7 @@ def g:DiffBranch(branch0: string)
 enddef
 
 command! -nargs=* DiffviewOpen call current.Open([<f-args>])
-command! -nargs=* DiffviewCommit call current.Open([<f-args>], true)
+command! -nargs=* DiffviewCommit call current.Commit([<f-args>])
 command! -nargs=0 DiffviewRefresh call current.Refresh()
 command! -nargs=0 DiffviewClose call current.Close()
 command! -nargs=1 DiffBranch call g:DiffBranch(<f-args>)

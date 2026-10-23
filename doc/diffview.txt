@@ -62,16 +62,38 @@ and NERDTREE_RUNTIME setup for developer checks.
     explicit refresh, which resolves the original arguments again.
 
                                                        *:DiffviewCommit*
-:DiffviewCommit [revision]
-    Show changes introduced by a commit (default HEAD): first parent on the
-    left, the commit on the right. Merge commits always use their first parent;
-    no combined or three-way diff. Root commits compare EMPTY to the commit,
-    without writing a Git object. Missing parent objects in shallow/incomplete
-    history cause a Git error, not a false root-commit view.
+:DiffviewCommit
+    Search commits reachable from the current repository's HEAD, including
+    merged history, using core fzf. Rows show a short commit ID, date, author
+    and subject. Type to search; Enter selects one commit. Esc or Ctrl-C cancels.
+    No match/cancel/errors retain the old comparison and unsaved user buffers.
 
-    Accept exactly zero or one argument resolving to a commit. Labels identify
-    the revisions and resolved short commit IDs; entries are grouped under
-    Commit. Refresh resolves the original revision argument again.
+    Requires the optional core junegunn/fzf Vim integration to be loaded and an
+    fzf executable on PATH. The separate fzf.vim plugin is not required.
+    Install both yourself; Diffview never downloads dependencies. With vim-plug,
+    add Plug 'junegunn/fzf' and install the binary through your package manager.
+    Core revision b412a45 and binary 0.67.0 were verified; other versions remain
+    unverified. The normal core fzf layout preferences are respected.
+
+    Selection opens first-parent-to-commit as below. The full selected ID and
+    original repository stay fixed; refresh never reopens the picker. Metadata
+    controls are escaped for display and are never interpreted as commands.
+    History loading is synchronous and can pause Vim for large repositories.
+    Other branches' unique commits, reflogs and file-specific history are not
+    searched. Bare/unborn/non-Git repositories report an error.
+
+:DiffviewCommit {revision}
+    Directly show changes introduced by one commit, without requiring fzf.
+    Use DiffviewCommit HEAD for the former no-argument behavior. The first
+    parent is on the left and the commit on the right. Merge commits always
+    use their first parent; no combined or three-way diff. Root commits compare
+    EMPTY to the commit, without writing a Git object. Missing parent objects
+    in shallow/incomplete history cause a Git error, not a false root view.
+
+    Accept exactly one argument resolving to a commit. Labels identify the
+    revision and resolved short commit IDs; entries are grouped under Commit.
+    Refresh resolves an explicit named revision again, while picked IDs remain
+    immutable. Other Diffview commands do not depend on fzf.
 
                                                        *:DiffviewRefresh*
 :DiffviewRefresh
