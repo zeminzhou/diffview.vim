@@ -134,6 +134,72 @@ and NERDTREE_RUNTIME setup for developer checks.
     The former :DiffBranch and g:DiffBranch() APIs are removed. Migrate to
     DiffviewBranch; use DiffviewOpen target HEAD for named-ref dynamic Refresh.
 
+                                                       *:DiffviewFileHistory*
+:DiffviewFileHistory [revision] [-- file]
+    Search first-parent file history with native rename following. An ordinary
+    file uses that file's repository (independent of cwd) and captured HEAD.
+    A pane uses its raw side path and captured committed endpoint; a panel
+    requires a file node and uses destination/right context. Proven subtree
+    prefixes are preserved. An optional revision overrides the starting commit.
+    EMPTY/unknown tree provenance/directories/uncommitted-only paths refuse.
+
+    Explicit -- file uses the cwd repository and exactly one literal Git file
+    path. Deleted worktree files are allowed when earlier history exists.
+    No pathspec/glob, traversal, absolute or directory paths. >
+        DiffviewFileHistory
+        DiffviewFileHistory HEAD~3 -- src/parser.py
+        DiffviewFileHistory -- path\ with\ spaces.py
+<
+    Rows capture full commits and raw historical paths. Enter opens the normal
+    first-parent full-file change with old/new rename identities. Root commits
+    retain EMPTY left; a missing shallow parent is an error. Refresh retains
+    the selected commit, historical paths and repository without another picker.
+    Rename following is Git's heuristic, not copy-aware/DAG identity tracking.
+
+                                                       *:DiffviewLineHistory*
+:[range]DiffviewLineHistory [revision]
+    Trace the cursor line or inclusive numeric/Visual range with native Git -L
+    in the contextual ordinary file/content pane, not a panel or arbitrary path.
+    Displayed lines and final EOL must exactly match the chosen committed blob.
+    Refuse dirty/different/binary/absent/nonregular content and invalid ranges;
+    never save/reload or invent historical line mappings. >
+        DiffviewLineHistory
+        10,24DiffviewLineHistory
+        '<,'>DiffviewLineHistory
+<
+    First-parent traced commit IDs are associated with NUL-delimited file
+    history raw paths, not guessed from human/quoted patch headers. Enter opens
+    that commit's whole-file first-parent comparison, not a range-only blob.
+    Native -L unsupported-input errors are reported without changing the view.
+    FileHistory remains usable on dirty ordinary files.
+
+                                                       *diffview-merge-base*
+:DiffviewOpen --merge-base A B [-- paths...]
+:DiffviewBranch --merge-base [branch] [-- paths...]
+    Capture complete input commit IDs and require exactly one merge base.
+    Compare base to captured B/HEAD, with explicit base identity in the left
+    label. No base or multiple criss-cross bases is an error; no fetch, virtual
+    merge or A...B parsing. Branch's omitted target uses its existing picker,
+    computing the base only for the accepted captured target/HEAD pair.
+    Refresh keeps the resulting commits/labels/root/prefixes fixed and performs
+    no merge-base query or picker/ref reload. Existing direct defaults remain.
+
+                                                       *diffview-preview*
+    Commit/FileHistory/LineHistory pickers show focused full ID, author/date,
+    message, statistics and first-parent patch. Root compares against EMPTY.
+    Captured prefixes/historical paths restrict summary/patch, not the message.
+    Acceptance still opens whole files. Preview is right50% wrapped; Ctrl-/
+    toggles and fzf's normal preview-scroll keys apply. Branch has no preview.
+
+    Plain escaped text, at most2000 visible lines and4096 displayed bytes per
+    line with explicit truncation markers. This limits display, not Git work.
+    A private0700 immutable source context and restricted numeric focus token
+    feed one native Vim helper/system xargs -0 pipeline. Raw metadata and paths
+    never enter shell code. No interpreter, pager, external diff or textconv.
+    More than256 Git arguments/8192 transport bytes, missing/incompatible xargs
+    or failed Git shows a local tagged preview error; selection remains usable.
+    No persistent preview cache or all-history patch generation.
+
                                                        *:DiffviewFilter*
 :DiffviewFilter [paths...]
     Project the active full comparison onto repository-relative literal path
@@ -269,8 +335,8 @@ and NERDTREE_RUNTIME setup for developer checks.
 
     Git runs synchronously and large inputs can block Vim. Other versions,
     platforms and unusually large workloads remain unverified.
-    Windows support, Git mutations (stage/restore/checkout), history browsing,
-    editable panes, automatic refresh and three-way merges are not provided.
+    Windows support, Git mutations (stage/restore/checkout), copy-aware/DAG
+    history, editable panes, automatic refresh and three-way merges are not provided.
 
     Inspired by https://github.com/sindrets/diffview.nvim navigation/layout;
     uses native Vim9/Git, with no Neovim or Lua dependency.

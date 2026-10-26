@@ -3,15 +3,17 @@ vim9script
 # Copyright (C) 2022 zeminzhou <zeminzhou_@outlook.com>
 # Modified 2026-10-22. Licensed under AGPL-3.0-or-later; see LICENSE.
 
+export def Command(root: string, args: list<string>): list<string>
+    return ['git', '--no-pager', '--no-optional-locks', '--literal-pathspecs', '-c', 'diff.autoRefreshIndex=false', '-C', root] + args
+enddef
+
 export def Run(root: string, args: list<string>, allowOne = false): list<string>
     var output = tempname()
     var errors = tempname()
     var process: job
     try
         # git diff's stat refresh can write the index even without optional locks.
-        process = job_start(['git', '--no-optional-locks', '--literal-pathspecs',
-            '-c', 'diff.autoRefreshIndex=false',
-            '-C', root] + args, {in_io: 'null', out_io: 'file', out_name: output,
+        process = job_start(Command(root, args), {in_io: 'null', out_io: 'file', out_name: output,
             err_io: 'file', err_name: errors})
         if job_status(process) == 'fail'
             throw '[diffview] Cannot start Git; check that git is installed.'

@@ -122,6 +122,8 @@ Diffview does not save, reload or discard your user buffers.
 | `:DiffviewCommit` | Search HEAD history with fzf, then first parent → selected commit |
 | `:DiffviewCommit {revision}` | First parent → specified commit; no fzf required |
 | `:DiffviewBranch [branch]` | Target branch → captured committed HEAD; search local/remote refs with fzf when omitted |
+| `:DiffviewFileHistory [revision] [-- file]` | First-parent file history with native rename following |
+| `:[range]DiffviewLineHistory [revision]` | Native numeric line history when displayed content matches a committed blob |
 | `:DiffviewRefresh` | Re-read the original repository and comparison request |
 | `:DiffviewFilter [paths...]` | Project changed entries onto literal path prefixes; no arguments clears |
 | `:DiffviewGotoFile` / `gf` | Open the current side's real worktree file in a new ordinary tab |
@@ -249,6 +251,70 @@ local branch literally named `origin/main` wins that spelling; use
 `DiffviewOpen target HEAD` for general named revisions and dynamic Refresh.
 The optional `--` prefixes, syntax, statistics, gf and failure/data protections
 are shared with the other comparison commands.
+
+### File and line history
+
+```vim
+:DiffviewFileHistory
+:DiffviewFileHistory HEAD~3 -- src/parser.py
+:DiffviewFileHistory -- path\ with\ spaces.py
+:DiffviewLineHistory
+:10,24DiffviewLineHistory
+:'<,'>DiffviewLineHistory
+```
+
+An ordinary file uses its own repository even when cwd is elsewhere, starting at
+captured HEAD unless a revision is supplied. A Diffview content pane uses its
+actual side path and captured committed endpoint; a file node uses the right
+side. Proven subtree prefixes are retained. EMPTY sides, unknown raw-tree
+provenance, directories and uncommitted-only paths are refused. Explicit
+FileHistory `-- file` instead uses the cwd repository and permits a deleted path
+when its earlier history exists. Exactly one literal file is accepted.
+
+File history is **first-parent, follows renames** using Git's native heuristic.
+Line history traces the cursor or inclusive numeric/Visual range with Git `-L`.
+Displayed lines and final EOL must match the chosen committed blob exactly;
+dirty or otherwise different text is refused without saving or reloading it.
+This is a range trace, not blame or an edited-line mapping engine. Raw historical
+paths are associated through NUL-delimited file history, never parsed from patch
+labels. Rename detection is heuristic; copy tracking and a full DAG UI are absent.
+
+Enter opens that historical commit's normal first-parent whole-file comparison,
+including its actual rename paths; root commits have EMPTY on the left. It does
+not create a range-only buffer. The full commit/path/repository stay fixed on
+Refresh. Esc/Ctrl-C, no match and errors preserve the previous view.
+
+### Explicit merge-base review
+
+```vim
+:DiffviewOpen --merge-base main feature -- src tests
+:DiffviewBranch --merge-base main
+:DiffviewBranch --merge-base -- src
+```
+
+This explicit option captures one unique merge base on the left and the captured
+right commit/HEAD on the right. Labels identify the base rather than the target
+tip. Zero or multiple bases (including unrelated/criss-cross histories) are
+errors; no virtual merge or fetch is performed. Both resulting IDs, names, root
+and filters stay fixed through Refresh. Ordinary Open/Branch defaults keep their
+direct comparison semantics; no `A...B` revision shorthand is added.
+
+### Focused commit preview
+
+Commit, file-history and line-history pickers preview only the focused commit:
+full ID, author/date/message, changed-file statistics and a first-parent patch.
+Root previews compare against EMPTY. Filters constrain summary/patch, not the
+message. The right half wraps; Ctrl-/ toggles the preview and native fzf keys
+scroll it. Branch selection remains a branch picker without this preview.
+
+Preview text escapes terminal controls and is capped at 2000 visible lines and
+4096 displayed bytes per line, with explicit markers. Git runtime and temporary
+work are not bounded by those display limits. The isolated native Vim worker
+uses a fixed system `xargs -0` transport; no Python/Node/pager/external diff is
+required, downloaded or executed. Raw paths/messages are data, not shell code.
+An argument request above 8192 bytes or 256 Git arguments, unavailable transport
+or Git failure gives a local tagged preview error; normal selection still works.
+No all-history patch precomputation or persistent preview cache is created.
 
 ### Syntax, filtering and worktree navigation
 

@@ -7,6 +7,7 @@ import autoload 'diffview/git.vim' as git
 import autoload 'diffview/tree.vim' as tree
 import autoload 'diffview/syntax.vim' as syntax
 import autoload 'diffview/history.vim' as history
+import autoload 'diffview/preview.vim' as preview
 
 var view: dict<any> = {}
 var serial = 0
@@ -517,6 +518,9 @@ def Selected(root: string, source: list<string>, origin: dict<any>, paths: list<
             pushed.command = 'tcd'
         endif
     endif
+    if get(origin, 'failed', false)
+        return
+    endif
     var kind = get(snapshot, 'kind', empty(snapshot) ? 'commit' : 'branch')
     if type(lines) != v:t_list
         Error('Invalid fzf ' .. kind .. ' selection.')
@@ -554,6 +558,7 @@ def Selected(root: string, source: list<string>, origin: dict<any>, paths: list<
 enddef
 
 def PickerExit(origin: dict<any>, code: number)
+    preview.Cleanup(get(origin, 'preview', ''))
     var location = win_id2tabwin(origin.window)
     if location[0] != 0
         origin.directory = getcwd(location[1], location[0])
@@ -572,11 +577,20 @@ def RollbackPicker(origin: dict<any>)
     if temporary && &buftype == 'terminal'
         # Detach the owned terminal before restoring a caller over bufhidden=wipe.
         setbufvar(buffer, '&bufhidden', 'hide')
-        job_stop(term_getjob(buffer), 'kill')
+        var job = term_getjob(buffer)
+        job_stop(job, 'term')
+        var started = reltime()
+        while job_status(job) == 'run' && reltimefloat(reltime(started)) < 2
+            sleep 1m
+        endwhile
+        if job_status(job) == 'run'
+            job_stop(job, 'kill')
+        endif
     endif
-    if temporary && win_gettype(window) == 'popup'
+    if temporary && index(popup_list(), window) >= 0
         popup_close(window)
-    elseif temporary && index(origin.windows, window) < 0
+    elseif temporary && !empty(getwininfo(window)) && winbufnr(window) == buffer
+        && index(origin.windows, window) < 0 && win_gotoid(window)
         if winnr('$') == 1 && tabpagenr('$') > 1
             noautocmd tabclose
         else
@@ -597,6 +611,7 @@ def RollbackPicker(origin: dict<any>)
 enddef
 
 def Pick(commit: bool, paths: list<string>, mergeBase = false, historyContext: dict<any> = {})
+    var prepared: dict<string> = {}
     try
         tree.Check()
         if !exists('*fzf#run') || !exists('*fzf#wrap') || !exists('*fzf#exec') || !executable('fzf')
@@ -637,6 +652,16 @@ def Pick(commit: bool, paths: list<string>, mergeBase = false, historyContext: d
                 .. historyContext.start .. ' | ' .. historyContext.path
                 .. (empty(historyContext.range) ? '' : ' | lines ' .. join(historyContext.range, ','))))
         endif
+        if commit
+            var members: list<dict<any>> = empty(historyContext)
+                ? mapnew(source, (_, row) => ({oid: matchstr(row, '^\x\+\ze\t'), paths: copy(paths)}))
+                : mapnew(snapshot.targets, (_, target) => ({oid: target.oid, paths: [target.oldpath, target.path]}))
+            prepared = preview.Prepare(root, members)
+            origin.preview = prepared.context
+            add(options, '--preview=' .. prepared.command)
+            add(options, '--preview-window=right,50%,wrap')
+            add(options, '--bind=ctrl-/:toggle-preview')
+        endif
         var picker = fzf#wrap({source: source,
             sinklist: (lines) => Selected(root, source, origin, paths, lines, snapshot),
             exit: (code) => PickerExit(origin, code),
@@ -648,6 +673,7 @@ def Pick(commit: bool, paths: list<string>, mergeBase = false, historyContext: d
             fzf#run(picker)
         catch
             var failure = v:exception
+            origin.failed = true
             RollbackPicker(origin)
             throw '[diffview] Cannot open fzf: ' .. failure
         finally
@@ -672,6 +698,7 @@ def Pick(commit: bool, paths: list<string>, mergeBase = false, historyContext: d
             endif
         endtry
     catch
+        preview.Cleanup(get(prepared, 'context', ''))
         Error(v:exception)
     endtry
 enddef
@@ -767,6 +794,9 @@ def HistoryContext(revision: string, explicitPath: string, lineMode: bool): dict
         path = strpart(filename, strlen(root) + 1)
     endif
     start = git.Resolve(root, revision != '' ? revision : start != '' ? start : 'HEAD', 'commit')
+    if explicitPath == ''
+        history.File(root, start, path, true)
+    endif
     return {root: root, start: start, path: path}
 enddef
 
@@ -775,7 +805,7 @@ export def FileHistory(args: list<string>)
         var separator = index(args, '--')
         var revisions = separator < 0 ? copy(args) : separator == 0 ? [] : args[0 : separator - 1]
         var paths = separator < 0 ? [] : args[separator + 1 :]
-        if len(revisions) > 1 || (separator >= 0 && len(paths) != 1)
+        if len(revisions) > 1 || (separator >= 0 && (len(paths) != 1 || paths[0] == ''))
             throw '[diffview] Usage: DiffviewFileHistory [revision] [-- one-file]'
         endif
         var context = HistoryContext(get(revisions, 0, ''), get(paths, 0, ''), false)

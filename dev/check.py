@@ -1435,6 +1435,17 @@ DiffviewClose
                                    for p in branch_repo.rglob("*") if p.is_file()}
             assert before_branch_picker == after_branch_picker, "Branch picker preserves every byte/mode after declared ref actors restore"
         print("PASS: real branch fzf selection/no-match SHA1/SHA256, async tcd, default/enew live-job rollback; captured-spec fixed tips/root/prefixes and rejection")
+        vim(picker, "let preview_merge = " + quote(merge_commit) + "\n" + r'''
+let prepared = diffview#preview#Prepare(getcwd(), [{'oid': preview_merge, 'paths': []}])
+try
+  let output = system(substitute(prepared.command, '{n}', '0', 'g'))
+  call assert_match('commit ' . preview_merge, output)
+  call assert_match('+SIDE', output)
+  call assert_notmatch('diff --cc', output, 'merge preview uses first parent, not combined diff')
+finally
+  call diffview#preview#Cleanup(prepared.context)
+endtry
+''', directory)
         before_history = {str(p.relative_to(reading)): p.read_bytes()
                           for p in reading.rglob("*") if p.is_file()}
         vim(reading, "let fzf_runtime = " + quote(fzf_runtime)
@@ -1498,6 +1509,69 @@ call assert_match('committed blob exactly', execute('messages'))
                          for p in reading.rglob("*") if p.is_file()}
         assert before_history == after_history, "History never mutates repository files"
         print("PASS: real file history root/rename selection, ordinary file repo context, numeric line history and dirty mismatch")
+        preview_repo = directory / "preview"
+        preview_repo.mkdir()
+        git(preview_repo, "init", "-q")
+        git(preview_repo, "config", "user.name", "Preview author")
+        git(preview_repo, "config", "user.email", "preview@example.invalid")
+        special_path = "colon:\t\n\\'|$()preview.py"
+        (preview_repo / special_path).write_text("ROOT preview\n")
+        git(preview_repo, "add", ".")
+        git(preview_repo, "commit", "-qm", "root preview")
+        preview_root = git(preview_repo, "rev-parse", "HEAD").decode().strip()
+        (preview_repo / special_path).write_text("CHANGED preview\n")
+        git(preview_repo, "commit", "-qam", "changed preview")
+        preview_tip = git(preview_repo, "rev-parse", "HEAD").decode().strip()
+        (preview_repo / "many.txt").write_text("".join(f"added line {i}\n" for i in range(2500)))
+        git(preview_repo, "add", ".")
+        message = directory / "preview-message"
+        message.write_text("界" * 5000 + "\x1b]52;c;PAYLOAD\x07\n\nlong message\n")
+        git(preview_repo, "commit", "-qF", str(message))
+        preview_large = git(preview_repo, "rev-parse", "HEAD").decode().strip()
+        before_preview = {str(p.relative_to(preview_repo)): p.read_bytes()
+                          for p in preview_repo.rglob("*") if p.is_file()}
+        vim(preview_repo, "let preview_root = " + quote(preview_root)
+            + "\nlet preview_tip = " + quote(preview_tip)
+            + "\nlet preview_large = " + quote(preview_large)
+            + "\nlet special_path = json_decode(" + quote(json.dumps(special_path)) + ")\n" + r'''
+let directory = getcwd()
+for [oid, path, needle] in [[preview_root, special_path, '+ROOT preview'], [preview_tip, special_path, '+CHANGED preview']]
+  let prepared = diffview#preview#Prepare(directory, [{'oid': oid, 'paths': [path]}])
+  try
+    let output = system(substitute(prepared.command, '{n}', '0', 'g'))
+    call assert_match('commit ' . oid, output)
+    call assert_match(needle, output)
+    call assert_equal(0, v:shell_error)
+    call assert_equal(-1, stridx(output, "\x1b"))
+  finally
+    call diffview#preview#Cleanup(prepared.context)
+    call assert_false(isdirectory(prepared.context))
+  endtry
+endfor
+let prepared = diffview#preview#Prepare(directory, [{'oid': preview_large, 'paths': []}, {'oid': repeat('0', 40), 'paths': []}, {'oid': preview_tip, 'paths': [repeat('x', 9000)]}])
+try
+  let output = system(substitute(prepared.command, '{n}', '0', 'g'))
+  let lines = split(output, "\n", 1)
+  if lines[-1] == '' | call remove(lines, -1) | endif
+  call assert_true(len(lines) <= 2000)
+  call assert_match('truncated at 2000 lines', lines[-1])
+  call assert_match('line truncated', output)
+  call assert_equal(-1, stridx(output, "\x1b"), 'preview renders ESC/OSC as plain text')
+  for line in lines
+    call assert_true(strlen(line) <= 4096, 'every displayed line stays within the byte limit')
+  endfor
+  for token in ['1', '2', '-1', '999']
+    let output = system(substitute(prepared.command, '{n}', token, 'g'))
+    call assert_match('\[diffview\] Preview', output, 'bad Git/member/oversize cannot become successful blank output')
+  endfor
+finally
+  call diffview#preview#Cleanup(prepared.context)
+endtry
+''', directory)
+        after_preview = {str(p.relative_to(preview_repo)): p.read_bytes()
+                         for p in preview_repo.rglob("*") if p.is_file()}
+        assert before_preview == after_preview, "Preview reads preserve all repository bytes"
+        print("PASS: native preview root/change/raw paths, tagged errors, 2000-line/4096-byte caps, control escaping and context cleanup")
     else:
         print("NOT RUN: optional fzf picker smoke (set FZF_RUNTIME to its core checkout)")
 

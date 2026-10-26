@@ -89,7 +89,11 @@ enddef
 export def Match(root: string, start: string, path: string, lines: list<string>, eol: bool, range: list<number>)
     var file = File(root, start, path, true)
     var blob = git.Blob(root, file.oid)
-    if blob.binary || blob.lines != lines || blob.eol != eol
+    var attributes = git.NulFields(git.Run(root, ['check-attr', '-z', 'diff', '--', file.path]))
+    if len(attributes) != 3 || attributes[0] != file.path || attributes[1] != 'diff'
+        throw '[diffview] Malformed history diff attribute record.'
+    endif
+    if blob.binary || attributes[2] == 'unset' || blob.lines != lines || blob.eol != eol
         throw '[diffview] Line history requires displayed content and EOL to match the committed blob exactly.'
     endif
     if len(range) != 2 || range[0] < 1 || range[1] < range[0] || range[1] > len(lines)
