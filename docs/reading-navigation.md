@@ -44,13 +44,15 @@ not relaunch fzf. Explicit named revisions retain re-resolution on Refresh.
 - Reuse Vim's built-in detection and syntax resources. Respect the user's global
   syntax setting; do not run `syntax on` or enable global filetype plugins.
   With syntax disabled, keep the comparison plain. Unknown language is plain.
-- Detection must not execute modelines or ordinary user BufRead/FileType/indent
+- Detection must not execute modelines or additional user BufRead/FileType/indent
   hooks on the snapshot, and must not read a similarly named worktree file.
   A private owned detection context may be used; it must be cleaned up without
   leaving buffers/windows, changing cwd/registers/options or replacing user data.
   Do not build an extensible language-provider framework or a new dependency.
 - Source FileType remains diffview, so real-file LSP/format/indent hooks are not
   attached to snapshots. The real file opened by gf uses normal Vim filetypes.
+  Preserve the existing FileType diffview creation event and its error rollback;
+  language detection/application must not add language-specific FileType events.
 - Clear stale syntax for EMPTY, No changes, No matching changes and unsupported
   explanation buffers. Switching from Python to an unknown extension must not
   retain Python syntax. Buffer text/source/EOL remain exact.
