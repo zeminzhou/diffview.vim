@@ -27,7 +27,7 @@ export def Prepare(root: string, members: list<dict<any>>): dict<string>
         var command = '{ ' .. Native('args', context)
             .. ' | xargs -0 -s 65536 sh -c '
             .. shellescape('test "$#" -ge 2 && test "$1" = "$0" || exit 64; n="$2"; shift 2; '
-                .. 'case "$n" in ""|*[!0-9]*) exit 64;; esac; test "$#" -eq "$n" || exit 64; GIT_SHALLOW_FILE=/dev/null exec git "$@"')
+                .. 'case "$n" in ""|*[!0-9]*) exit 64;; esac; test "$#" -eq "$n" || exit 64; GIT_NO_LAZY_FETCH=1 GIT_SHALLOW_FILE=/dev/null exec git "$@"')
             .. ' ' .. shellescape(context) .. ' 2>&1; '
             .. 'printf ''\nDIFFVIEW_PREVIEW_STATUS:%s\n'' "$?"; } | ' .. Native('render', context)
         return {context: context, command: command}

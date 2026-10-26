@@ -14,7 +14,7 @@ export def Run(root: string, args: list<string>, allowOne = false): list<string>
     try
         # git diff's stat refresh can write the index even without optional locks.
         process = job_start(Command(root, args), {in_io: 'null', out_io: 'file', out_name: output,
-            err_io: 'file', err_name: errors})
+            err_io: 'file', err_name: errors, env: {GIT_NO_LAZY_FETCH: '1'}})
         if job_status(process) == 'fail'
             throw '[diffview] Cannot start Git; check that git is installed.'
         endif

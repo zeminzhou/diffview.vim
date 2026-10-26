@@ -1761,6 +1761,55 @@ endtry
                          for p in preview_repo.rglob("*") if p.is_file()}
         assert before_preview == after_preview, "Preview reads preserve all repository bytes"
         print("PASS: native preview root/change/raw paths, tagged errors, 2000-line/4096-byte caps, control escaping and context cleanup")
+        git(preview_repo, "config", "uploadpack.allowFilter", "true")
+        partial = directory / "promisor"
+        git(directory, "clone", "-q", "--filter=blob:none", "--no-checkout", preview_repo.as_uri(), str(partial))
+        assert b"\n?" in git(partial, "rev-list", "--objects", "--all", "--missing=print"), "Fixture really lacks promised blobs"
+        before_partial = {str(p.relative_to(partial)): (p.stat().st_mode, p.read_bytes())
+                          for p in partial.rglob("*") if p.is_file()}
+        trace = directory / "promisor.trace.jsonl"
+        vim(preview_repo, "let fzf_runtime = " + quote(fzf_runtime)
+            + "\nlet partial = " + quote(partial) + "\nlet preview_root = " + quote(preview_root)
+            + "\nlet preview_tip = " + quote(preview_tip) + "\nlet $GIT_TRACE2_EVENT = " + quote(trace) + "\n" + r'''
+let &rtp = fzf_runtime . ',' . &rtp
+runtime plugin/fzf.vim
+function! fzf#run(spec) abort
+  let g:promisor_spec = copy(a:spec)
+endfunction
+execute 'edit ' . fnameescape(partial . '/many.txt')
+call setline(1, 'UNSAVED promisor caller')
+let userbuf = bufnr()
+let origin = win_getid()
+let no_lazy_fetch = $GIT_NO_LAZY_FETCH
+set nohidden autowrite autowriteall
+execute 'DiffviewOpen ' . preview_root . ' ' . preview_tip
+let panes = filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, 'diffview_role', '') != ''})
+let saved = map(copy(panes), {_, b -> [b.bufnr, getbufline(b.bufnr, 1, '$'), getbufvar(b.bufnr, 'diffview_source'), getbufvar(b.bufnr, '&readonly'), getbufvar(b.bufnr, '&modifiable')]})
+execute 'cd ' . fnameescape(partial)
+DiffviewCommit
+let extract = 'set -- ' . g:promisor_spec.options . '; for option do case "$option" in --preview=*) printf "%s\n" "${option#--preview=}";; esac; done'
+let command = systemlist('/bin/sh -c ' . shellescape(extract))[0]
+let output = system(substitute(command, '{n}', '0', 'g'))
+call assert_match('\[diffview\] Preview failed', output, 'missing promised blobs must not hydrate during preview')
+call call(g:promisor_spec.exit, [130])
+call win_gotoid(origin)
+let previous_spec = g:promisor_spec
+DiffviewLineHistory HEAD
+call assert_true(g:promisor_spec is previous_spec, 'missing committed blob never launches line history')
+call assert_match('\[diffview\] Git failed', execute('messages'))
+call assert_equal(saved, map(copy(panes), {_, b -> [b.bufnr, getbufline(b.bufnr, 1, '$'), getbufvar(b.bufnr, 'diffview_source'), getbufvar(b.bufnr, '&readonly'), getbufvar(b.bufnr, '&modifiable')]}))
+call assert_equal(origin, win_getid())
+call assert_equal(['UNSAVED promisor caller'], getbufline(userbuf, 1, '$'))
+call assert_true(getbufvar(userbuf, '&modified'))
+call assert_equal(no_lazy_fetch, $GIT_NO_LAZY_FETCH, 'lazy-fetch guard is child-local')
+DiffviewClose
+''', directory)
+        after_partial = {str(p.relative_to(partial)): (p.stat().st_mode, p.read_bytes())
+                         for p in partial.rglob("*") if p.is_file()}
+        assert before_partial == after_partial, "Promisor preview/history must not fetch or write repository bytes/modes"
+        events = [json.loads(line) for line in trace.read_text().splitlines()]
+        assert not any(event.get("event") == "child_start" and "fetch" in event.get("argv", []) for event in events), "No lazy-fetch child is allowed"
+        print("PASS: local-only promisor preview/line reads fail without lazy fetch, repository writes or dirty/view loss")
     else:
         print("NOT RUN: optional fzf picker smoke (set FZF_RUNTIME to its core checkout)")
 
