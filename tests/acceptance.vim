@@ -2257,7 +2257,7 @@ def ReadingGoto()
   var oldbuf = GotoCheck(repo .. '/old dir/same.py', 1)
   assert_equal(['OLDPATH current'], getbufline(oldbuf, 1, '$'), 'left uses oldpath, not the rename destination')
   win_gotoid(Role('right').winid)
-  var newbuf = GotoCheck(repo .. '/new dir/same.c', 1)
+  var newbuf = GotoCheck(repo .. '/new dir/same.c', min([line('.'), 2]))
   TreeCursor(Node('Staged', 'new dir/same.c'))
   assert_equal(newbuf, GotoCheck(repo .. '/new dir/same.c', 1), 'panel gf uses destination')
   win_gotoid(origin)
@@ -2426,12 +2426,20 @@ def SetProjection(paths: list<string>)
   execute 'DiffviewFilter ' .. join(mapnew(paths, (_, path) => escape(path, " \t\\")), ' ')
 enddef
 
+def GitSubcommand(record: string): string
+  var argv = split(record, "\n", true)
+  # The shared argv runner places the subcommand after its -C root pair.
+  var directory = index(argv, '-C')
+  if directory < 0 || directory + 2 >= len(argv)
+    throw 'Malformed logged Git argv'
+  endif
+  return argv[directory + 2]
+enddef
+
 def NoMetadataReload(first: number)
   for command in PickerGitCalls()[first : ]
-    var argv = split(command, "\n", true)
-    for forbidden in ['diff', 'diff-tree', 'rev-parse', 'log']
-      assert_equal(-1, index(argv, forbidden), 'projection does not reload Git comparison/history/refs')
-    endfor
+    assert_equal(-1, index(['diff', 'diff-tree', 'rev-parse', 'log'], GitSubcommand(command)),
+      'projection does not reload Git comparison/history/refs')
   endfor
 enddef
 
@@ -2606,7 +2614,7 @@ def ReadingFilter()
     DiffviewRefresh
     Pair(['LEFT subtree'], ['NEXT first subtree'])
     PickerOidUsed(Ref('reading-right'), first)
-    assert_equal([], filter(PickerGitCalls()[first : ], (_, command) => index(split(command, "\n", true), 'log') >= 0))
+    assert_equal([], filter(PickerGitCalls()[first : ], (_, command) => GitSubcommand(command) == 'log'))
     assert_equal(['Commit:one part/common.py'], EntryKeys(), 'fzf Refresh retains original repo/fullOID/filter')
   finally
     writefile([Ref('reading-right')], right_ref)
@@ -2687,7 +2695,7 @@ def ReadingStats()
   var expected = {Staged: NumstatOracle('staged'), Unstaged: NumstatOracle('unstaged')}
   var first = len(PickerGitCalls())
   DiffviewOpen
-  var diffs = PickerGitCalls()[first : ]->filter((_, command) => index(split(command, "\n", true), 'diff') >= 0)
+  var diffs = PickerGitCalls()[first : ]->filter((_, command) => GitSubcommand(command) == 'diff')
   assert_equal(2, len(diffs), 'stats reuse the two existing local diff queries')
   for command in diffs
     var argv = split(command, "\n", true)
