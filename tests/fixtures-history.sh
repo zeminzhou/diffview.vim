@@ -55,9 +55,16 @@ history_graph() {
     git -C "$history_fixture" branch review-merge
     cp "$history_fixture/src/new name.py" "$test_tmp/$history_prefix-merge.body"
     rm "$history_fixture/src/new name.py"
+    mkdir "$history_fixture/src/new name.py"
+    printf 'UNRELATED DELETE CHILD\n' > "$history_fixture/src/new name.py/child.txt"
     git -C "$history_fixture" add -A
     git -C "$history_fixture" commit -qm HIST_DELETE
     git -C "$history_fixture" rev-parse HEAD > "$test_tmp/refs/$history_prefix-delete"
+    rm "$history_fixture/src/new name.py/child.txt"
+    rmdir "$history_fixture/src/new name.py"
+    git -C "$history_fixture" add -A
+    git -C "$history_fixture" commit -qm HIST_CHILD_DELETE
+    git -C "$history_fixture" rev-parse HEAD > "$test_tmp/refs/$history_prefix-child-delete"
     printf 'recreated unrelated\n' > "$history_fixture/src/new name.py"
     git -C "$history_fixture" add .
     git -C "$history_fixture" commit -qm HIST_RECREATE
@@ -94,7 +101,7 @@ history_graph() {
     git -C "$history_fixture" commit -qm HIST_TARGET
     git -C "$history_fixture" rev-parse HEAD > "$test_tmp/refs/$history_prefix-target"
     git -C "$history_fixture" checkout -q main
-    for history_start in merge delete recreate; do
+    for history_start in merge delete child-delete recreate; do
         git --no-optional-locks -c diff.autoRefreshIndex=false -C "$history_fixture" \
             log --first-parent --follow --raw -z --no-abbrev --no-ext-diff --no-textconv \
             --format='%x00H%x00%H%x00%an%x00%s%x00' \
@@ -135,6 +142,14 @@ history_graph() {
         --format='commit %H%n%B' --stat --patch \
         "$(cat "$test_tmp/refs/$history_prefix-root")" -- NO_PATH_MATCHES \
         > "$test_tmp/$history_prefix-preview-empty-prefix.oracle"
+    git --no-optional-locks -C "$history_fixture" show --follow --no-ext-diff --no-textconv --no-color \
+        --format='commit %H%n%B' --stat --patch \
+        "$(cat "$test_tmp/refs/$history_prefix-delete")" -- 'src/new name.py' \
+        > "$test_tmp/$history_prefix-preview-delete-broad.oracle"
+    git --no-optional-locks -C "$history_fixture" show --follow --diff-filter=D --no-ext-diff --no-textconv --no-color \
+        --format='commit %H%n%B' --stat --patch \
+        "$(cat "$test_tmp/refs/$history_prefix-delete")" -- 'src/new name.py' \
+        > "$test_tmp/$history_prefix-preview-delete-exact.oracle"
     test "$(git -C "$history_fixture" diff-tree -r --no-commit-id --name-only \
         "$(cat "$test_tmp/refs/$history_prefix-rename")" -- src/old.py/child.txt)" = src/old.py/child.txt
     printf 'DISK dirt excluded\n' > "$history_fixture/other.txt"
