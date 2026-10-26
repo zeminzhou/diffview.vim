@@ -1,5 +1,8 @@
 # Reading and navigation
 
+The later [history and review contract](history-review.md) implements the file/line
+history, merge-base and commit-preview areas deferred by this baseline.
+
 This contract extends the existing read-only comparison browser with language
 syntax, worktree navigation, literal path filtering and line statistics. Existing
 local/tree/commit source semantics and the core fzf lifecycle remain in force.

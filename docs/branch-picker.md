@@ -1,5 +1,8 @@
 # Branch comparison and search
 
+The later [history and review contract](history-review.md) adds an explicit
+merge-base mode; the direct defaults and guarantees below remain in effect.
+
 ## Commands and comparison
 
 ```

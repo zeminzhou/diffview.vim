@@ -1,5 +1,8 @@
 # Commit search with fzf
 
+The later [history and review contract](history-review.md) adds focused commit
+previews and separate file/line history commands to this original baseline.
+
 ## User flow
 
 - `:DiffviewCommit` opens an fzf picker for commits reachable from the current
