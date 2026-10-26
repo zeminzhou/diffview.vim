@@ -93,7 +93,7 @@ Additional scenarios:
 
 | Case | Expected acceptance |
 | --- | --- |
-| trees | Divergent endpoint direction, left-only deletion absent from merge-base diff, ignored local/index dirt, add/delete/rename/mode, explicit trees/subtrees, legal quote/$()/pipe refs, empty result, legacy DiffBranch and Toggle |
+| trees | Divergent endpoint direction, left-only deletion absent from merge-base diff, ignored local/index dirt, add/delete/rename/mode, explicit trees/subtrees, legal quote/$()/pipe refs, empty result, supported target-to-HEAD commands and Toggle |
 | commits | Normal, root, first-parent merge and explicit HEAD contents; source identities; forced-binary ordinary/root commits |
 | historical_refresh | Fixed refs until refresh; explicit refresh re-resolves original names, preserves repository/selection and updates labels across tabs |
 | errors | Invalid revisions, blob/tree type mismatch, arities/ranges/options, non-Git/bare cwd and shallow missing parent; tagged error and old usable view retained |
@@ -125,6 +125,10 @@ Additional scenarios:
 | reading_goto | Public gf/command opens adjacent normal tabs, clamps line hints, reuses dirty targets without saving, preserves caller/options/registers, maps rename/subtree sides, rejects unknown tree/missing/nonregular/symlink targets; real FileType and loaded-target BufEnter failures restore focus/resources while retaining user hook edits |
 | reading_filter | Initial Open/Commit/fzf prefixes, local duplicate groups, rename old/new identity, segment/OR/normalization, literal control/display twins, retained selected snapshots, no diff/ref/history reload, no-match/clear/Refresh and read/native-render failure rollback |
 | reading_stats | Independent Git numstat oracle for local/tree/ordinary/root commit metadata; known zeros versus unsupported/binary/untracked unknowns, leaf/header totals and dynamic native rows; malformed-count boundary rejection |
+| branch_direct | Direct local/remote/full-ref tips, short-name collision, diverged endpoints, same-branch empty, detached/invalid/unborn and no-fzf behavior; retired command/function absent |
+| branch_real | Actual core/binary name-filtered local/remote selection and no match in explicit SHA-1/SHA-256 fixtures; symbolic aliases excluded, prefixes/labels/root and both captured tips remain fixed after refs/HEAD/cwd move |
+| branch_api | Captured-run boundary with real core wrap/exec: namespace/source membership, both-OID/original-root/prefix binding, malformed output, launch/read/render rollback and immutable Refresh |
+| branch_lifecycle | Minimal default-popup/enew Branch wiring for dirty initial/late tcd, real binary abort, initialization throw, post-live-job failure and unrelated user job preservation |
 
 Picker fixtures include six HEAD-reachable commits, a merged side branch and an
 excluded branch, Unicode/control/shell punctuation metadata, SHA-1/SHA-256 and
@@ -189,3 +193,16 @@ the complete candidate-owned runner and same-candidate terminal checks execute.
 The POSIX reading fixture also tracks a filename C:\literal.txt; Open,
 projection and actual gf must keep its colon and single backslash intact.
 Absolute/traversal filters and use-time symlink checks remain rejection cases.
+
+The two branch fixtures add two complete repository comparisons to the existing
+25. Independent Git controls distinguish direct endpoint changes from merge-base
+changes and confirm both object formats and the local/remote/symbolic-ref set.
+The former DiffBranch command and global function must be absent. Their old
+direction/dirty/invalid-input assertions now use supported Open/Branch commands;
+Toggle coverage remains. Use Open target HEAD when named refs must re-resolve on
+Refresh, or Branch when both captured tips must remain fixed.
+
+Branch API injection intercepts only run, sharing the existing captured-spec
+fixture with Commit; real wrap/exec and the original Commit lifecycle assertions
+remain intact. Filtered core selection and generated abort/term_sendkeys actors
+are headless dependency evidence, not physical-key terminal acceptance.

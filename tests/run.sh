@@ -145,6 +145,7 @@ printf 'OUTSIDE fixture marker\n' > "$test_tmp/outside/forced.dat"
 . "$root/tests/fixtures-nerdtree.sh"
 . "$root/tests/fixtures-picker.sh"
 . "$root/tests/fixtures-reading.sh"
+. "$root/tests/fixtures-branch.sh"
 
 # Compare all fixture bytes, including indexes/objects, after Vim exits.
 cp -R "$test_tmp/local repo 中文" "$test_tmp/local-before"
@@ -237,7 +238,8 @@ test_cases='local clean unborn nonrepo special refresh lifecycle ownership ances
     trees commits historical_refresh errors exclusions edges cross_tab read_failure navigation
     binary_clean binary_mixed large empty_start tree_nodes tree_history tree_isolation dependency tree_rollback
     picker_real picker_no_match picker_enew picker_async picker_sha256 picker_missing picker_old_binary picker_errors picker_api
-    reading_syntax reading_goto reading_filter reading_stats'
+    reading_syntax reading_goto reading_filter reading_stats
+    branch_direct branch_real branch_api branch_lifecycle'
 if [ -n "${NERDTREE_GIT_RUNTIME:-}" ]; then
     test_cases="$test_cases tree_git"
 else
@@ -271,6 +273,8 @@ for test_case in $test_cases; do
 done
 diff -r "$test_tmp/reading-before" "$test_tmp/reading repo"
 diff -r "$test_tmp/reading-outside-before" "$test_tmp/reading-outside"
+diff -r "$test_tmp/branch repo-before" "$test_tmp/branch repo"
+diff -r "$test_tmp/branch-sha256-before" "$test_tmp/branch-sha256"
 
 diff -r "$test_tmp/local-before" "$test_tmp/local repo 中文"
 diff -r "$test_tmp/clean-before" "$test_tmp/clean"

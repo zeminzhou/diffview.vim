@@ -564,12 +564,12 @@ def Trees()
   NoChanges()
   DiffviewClose
 
-  DiffBranch left
+  DiffviewOpen left HEAD
   Select('', 'shared.txt')
   Pair(['LEFT shared'], ['MERGED shared'])
   call g:ToggleDiffView()
   assert_equal([], PluginBuffers(), 'legacy Toggle closes a historical view')
-  call g:DiffBranch('left')
+  execute 'DiffviewBranch left'
   Select('', 'shared.txt')
   Pair(['LEFT shared'], ['MERGED shared'])
   DiffviewClose
@@ -2477,9 +2477,9 @@ def ReadingFilter()
   assert_equal(literal_drive, Node('Unstaged', literal_drive).diffview_entry.path)
   DiffviewOpen
   assert_equal(full, EntryKeys())
-  var wrapper_state = ComparisonState()
-  Reject('DiffBranch --')
-  assert_equal(wrapper_state, ComparisonState(), 'legacy wrapper still treats -- as an invalid revision')
+  var invalid_branch_state = ComparisonState()
+  Reject('DiffviewBranch --version')
+  assert_equal(invalid_branch_state, ComparisonState(), 'invalid branch option preserves the current projection/view')
   Select('Unstaged', 'code.py')
   var snapshots = [getbufline(Role('left').bufnr, 1, '$'), getbufline(Role('right').bufnr, 1, '$')]
   var disk = readfile('code.py', 'b')
@@ -2798,6 +2798,426 @@ def ReadingStats()
   DiffviewClose
 enddef
 
+def BranchStart(target = '', paths: list<string> = [])
+  var command = 'DiffviewBranch'
+  if target != ''
+    command ..= ' ' .. escape(target, " \t\\")
+  endif
+  if !empty(paths)
+    command ..= ' -- ' .. join(mapnew(paths, (_, path) => escape(path, " \t\\")), ' ')
+  endif
+  execute command
+enddef
+
+def BranchSources(name: string, prefix = 'branch', current = 'main')
+  var left = PaneOption('left', 'statusline')
+  var right = PaneOption('right', 'statusline')
+  var display_name = substitute(name, '^refs/\%(heads\|remotes\)/', '', '')
+  assert_true(stridx(left, display_name) >= 0, 'target branch label is visible')
+  assert_true(stridx(left, Ref(prefix .. '-target')[0 : 6]) >= 0, 'left identifies the captured target commit')
+  assert_true(stridx(right, current) >= 0, 'invoking branch label is visible')
+  assert_true(stridx(right, Ref(prefix .. '-head')[0 : 6]) >= 0, 'right identifies the captured HEAD commit')
+enddef
+
+def BranchNoReload(first: number)
+  for record in PickerGitCalls()[first : ]
+    assert_equal(-1, index(['for-each-ref', 'symbolic-ref', 'log', 'fetch', 'pull', 'ls-remote', 'checkout', 'update-ref'],
+      GitSubcommand(record)), 'frozen branch refresh does not enumerate/follow refs or contact/mutate branches')
+  endfor
+enddef
+
+def BranchNoWrites(first: number)
+  for record in PickerGitCalls()[first : ]
+    assert_equal(-1, index(['fetch', 'pull', 'ls-remote', 'checkout', 'switch', 'update-ref', 'reset', 'add', 'commit', 'merge'],
+      GitSubcommand(record)), 'branch browsing never contacts a remote or mutates Git state')
+  endfor
+enddef
+
+def BranchFiltered(query: string, paths: list<string> = [])
+  $FZF_DEFAULT_OPTS = '--filter=' .. shellescape(query)
+  BranchStart('', paths)
+  WaitPicker()
+enddef
+
+def BranchDirect()
+  assert_equal(0, exists(':DiffBranch'), 'retired command has no alias or warning stub in a fresh plugin session')
+  assert_equal(0, exists('*g:DiffBranch'), 'retired global function is absent')
+  var first_call = len(PickerGitCalls())
+  execute 'cd ' .. fnameescape(test_tmp .. '/branch repo')
+  var repo = getcwd()
+  edit shared.txt
+  setline(1, ['UNSAVED direct branch caller'])
+  set nohidden autowrite autowriteall
+  var userbuf = bufnr()
+  SeedRegisters()
+  var registers = RegisterState()
+  assert_false(exists('*fzf#run'), 'direct branch case starts without core fzf')
+  for name in ['BR_LOCAL_PICK', 'refs/heads/BR_LOCAL_PICK', 'origin/collision', Ref('branch-punctuation')]
+    BranchStart(name)
+    Select('', 'shared.txt')
+    Pair(['TARGET shared'], ['MAIN shared'])
+    BranchSources(name)
+    Select('', 'target-only.txt')
+    Pair(['TARGET only'], [''])
+    assert_equal('D', Node('', 'target-only.txt').diffview_entry.status, 'direct endpoints, not merge-base diff')
+    Select('', 'current-only.txt')
+    Pair([''], ['MAIN only'])
+    assert_false(filereadable('BRANCH_INJECTED'))
+  endfor
+  BranchStart('refs/remotes/origin/collision')
+  Select('', 'shared.txt')
+  Pair(['BASE shared'], ['MAIN shared'])
+  assert_match('origin/collision', PaneOption('left', 'statusline'))
+  assert_true(stridx(PaneOption('left', 'statusline'), Ref('branch-root')[0 : 6]) >= 0)
+  assert_equal([], filter(Entries(), (_, node) => node.diffview_entry.path == 'target-only.txt'),
+    'full remote ref disambiguates the same short name')
+  BranchStart('origin/BR_REMOTE_PICK', ['src'])
+  assert_equal(['src/choice.txt'], Entries()->mapnew((_, node) => node.diffview_entry.path))
+  Pair(['TARGET src'], ['MAIN src'])
+  BranchSources('origin/BR_REMOTE_PICK')
+  BranchStart('main')
+  NoChanges()
+  var head_path = repo .. '/.git/HEAD'
+  var head_bytes = readfile(head_path, 'b')
+  try
+    writefile([Ref('branch-head')], head_path)
+    BranchStart('BR_LOCAL_PICK')
+    Select('', 'shared.txt')
+    Pair(['TARGET shared'], ['MAIN shared'])
+    assert_match('\cdetached', PaneOption('right', 'statusline'))
+  finally
+    writefile(head_bytes, head_path, 'b')
+  endtry
+  BranchStart('BR_LOCAL_PICK')
+  Select('', 'shared.txt')
+  var state = ComparisonState()
+  for command in ['DiffviewBranch absent', 'DiffviewBranch HEAD', 'DiffviewBranch main^',
+      'DiffviewBranch BR_TAG_NOT_BRANCH', 'DiffviewBranch refs/tags/BR_TAG_NOT_BRANCH',
+      'DiffviewBranch --version', 'DiffviewBranch ^BR_LOCAL_PICK', 'DiffviewBranch main BR_LOCAL_PICK',
+      'DiffviewBranch main..BR_LOCAL_PICK', 'DiffviewBranch main -- ../outside']
+    Reject(command)
+    assert_equal(state, ComparisonState(), 'invalid branch input preserves the old view: ' .. command)
+  endfor
+  var saved_path = $PATH
+  try
+    $PATH = test_tmp .. '/no-fzf-bin'
+    assert_false(executable('fzf'))
+    BranchStart('BR_LOCAL_PICK')
+    Select('', 'shared.txt')
+    Pair(['TARGET shared'], ['MAIN shared'])
+    state = ComparisonState()
+    Reject('DiffviewBranch')
+    assert_match('\cfzf', execute('messages'))
+    assert_equal(state, ComparisonState())
+    &runtimepath = $FZF_RUNTIME .. ',' .. &runtimepath
+    runtime plugin/fzf.vim
+    assert_true(exists('*fzf#exec'))
+    Reject('DiffviewBranch')
+    assert_equal(state, ComparisonState(), 'missing binary cannot replace the old view')
+    BranchStart('BR_LOCAL_PICK')
+    Select('', 'shared.txt')
+    Pair(['TARGET shared'], ['MAIN shared'])
+  finally
+    $PATH = saved_path
+  endtry
+  for directory in ['unborn', 'nonrepo', 'bare.git']
+    execute 'cd ' .. fnameescape(test_tmp .. '/' .. directory)
+    for command in ['DiffviewBranch BR_LOCAL_PICK', 'DiffviewBranch']
+      state = ComparisonState()
+      $FZF_DEFAULT_OPTS = '--filter=NO_BRANCH_MATCH_96b5'
+      Reject(command)
+      WaitPicker()
+      assert_equal(state, ComparisonState(), 'invalid repository/current HEAD preserves the view')
+    endfor
+  endfor
+  BranchNoWrites(first_call)
+  assert_equal(registers, RegisterState())
+  assert_true(getbufvar(userbuf, '&modified'))
+  assert_equal(['UNSAVED direct branch caller'], getbufline(userbuf, 1, '$'))
+  assert_equal(['DISK branch dirt'], readfile(repo .. '/shared.txt'))
+  DiffviewClose
+enddef
+
+def BranchReal()
+  var first_call = len(PickerGitCalls())
+  for item in [['branch repo', 'branch'], ['branch-sha256', 'branch256']]
+    tabnew
+    execute 'cd ' .. fnameescape(test_tmp .. '/' .. item[0])
+    var repo = getcwd()
+    edit shared.txt
+    setline(1, ['UNSAVED real branch caller'])
+    var userbuf = bufnr()
+    set nohidden autowrite autowriteall
+    SeedRegisters()
+    BranchFiltered('BR_LOCAL_PICK', ['src'])
+    assert_equal(['src/choice.txt'], Entries()->mapnew((_, node) => node.diffview_entry.path))
+    Pair(['TARGET src'], ['MAIN src'])
+    BranchSources('BR_LOCAL_PICK', item[1])
+    assert_equal(item[1] == 'branch' ? 40 : 64, strlen(Ref(item[1] .. '-target')))
+    var state = ComparisonState()
+    BranchFiltered('NO_BRANCH_MATCH_96b5')
+    assert_equal(state, ComparisonState(), 'real binary no-match leaves the view and focus intact')
+    BranchFiltered('origin/HEAD')
+    assert_equal(state, ComparisonState(), 'symbolic remote alias is not selectable')
+    BranchFiltered('origin/BR_REMOTE_PICK', ['src'])
+    Pair(['TARGET src'], ['MAIN src'])
+    BranchSources('origin/BR_REMOTE_PICK', item[1])
+    var expected = ReadingView()
+    var head_path = repo .. '/.git/HEAD'
+    var main_path = repo .. '/.git/refs/heads/main'
+    var target_path = repo .. '/.git/refs/remotes/origin/BR_REMOTE_PICK'
+    var files = [head_path, main_path, target_path]
+    var original = files->mapnew((_, file) => readfile(file, 'b'))
+    try
+      for file in files
+        writefile([Ref(item[1] .. '-root')], file)
+      endfor
+      execute 'cd ' .. fnameescape(test_tmp .. '/nonrepo')
+      var first = len(PickerGitCalls())
+      DiffviewRefresh
+      WaitPicker()
+      Pair(['TARGET src'], ['MAIN src'])
+      BranchSources('origin/BR_REMOTE_PICK', item[1])
+      assert_equal(expected, ReadingView(), 'immutable branch labels, prefixes and both tips survive moved refs/HEAD')
+      assert_equal(resolve(repo), resolve(getbufvar(Role('panel').bufnr, 'NERDTree').root.path.str()))
+      BranchNoReload(first)
+    finally
+      for i in range(len(files))
+        writefile(original[i], files[i], 'b')
+      endfor
+    endtry
+    assert_true(getbufvar(userbuf, '&modified'))
+    assert_equal(['UNSAVED real branch caller'], getbufline(userbuf, 1, '$'))
+    assert_equal(['DISK branch dirt'], readfile(repo .. '/shared.txt'))
+    DiffviewClose
+  endfor
+  BranchNoWrites(first_call)
+  writefile([json_encode({scope: 'real core/binary filtered selection, not physical terminal input',
+    core_binary: fzf#exec('0.0.0', 1), formats: ['sha1', 'sha256']})], test_tmp .. '/branch-real.facts.json')
+enddef
+
+def BranchApi()
+  var first_call = len(PickerGitCalls())
+  execute 'cd ' .. fnameescape(test_tmp .. '/branch repo')
+  var repo = getcwd()
+  DiffviewOpen
+  Select('Staged', 'shared.txt')
+  BranchStart('', ['src'])
+  var row = PickerRow('BR_LOCAL_PICK')
+  var rows = g:diffview_test_picker_spec.source
+  assert_equal(7, len(rows), 'all ordinary local/remote refs, including same-OID aliases, appear once')
+  assert_equal([], filter(copy(rows), (_, line) => stridx(line, 'origin/HEAD') >= 0))
+  assert_equal([], filter(copy(rows), (_, line) => stridx(line, 'BR_TAG_NOT_BRANCH') >= 0))
+  var collision = filter(copy(rows), (_, line) => stridx(line, 'origin/collision') >= 0)
+  assert_equal(2, len(collision), 'local and remote collision rows are distinct')
+  assert_true(!empty(filter(copy(collision), (_, line) => line =~ '\clocal\|refs/heads/')))
+  assert_true(!empty(filter(copy(collision), (_, line) => line =~ '\cremote')))
+  PickerRow('alias-target')
+  var head_path = repo .. '/.git/HEAD'
+  var files = [head_path, repo .. '/.git/refs/heads/main', repo .. '/.git/refs/heads/BR_LOCAL_PICK']
+  var original = files->mapnew((_, file) => readfile(file, 'b'))
+  try
+    SetProjection(['shared.txt'])
+    for file in files
+      writefile([Ref('branch-root')], file)
+    endfor
+    execute 'cd ' .. fnameescape(test_tmp .. '/picker-elsewhere')
+    var cwd = getcwd()
+    PickerOutput([row])
+    assert_equal(['src/choice.txt'], Entries()->mapnew((_, node) => node.diffview_entry.path),
+      'callback retains the launch prefixes, not a later projection')
+    Pair(['TARGET src'], ['MAIN src'])
+    BranchSources('BR_LOCAL_PICK')
+    assert_equal(resolve(repo), resolve(getbufvar(Role('panel').bufnr, 'NERDTree').root.path.str()))
+    assert_equal(cwd, getcwd(), 'callback keeps newer cwd')
+    var calls = g:diffview_test_picker_calls
+    var first = len(PickerGitCalls())
+    DiffviewRefresh
+    Pair(['TARGET src'], ['MAIN src'])
+    BranchSources('BR_LOCAL_PICK')
+    assert_equal(calls, g:diffview_test_picker_calls, 'refresh never opens another picker')
+    BranchNoReload(first)
+  finally
+    for i in range(len(files))
+      writefile(original[i], files[i], 'b')
+    endfor
+  endtry
+  execute 'cd ' .. fnameescape(repo)
+  BranchStart('', ['src'])
+  row = PickerRow('BR_LOCAL_PICK')
+  var state = ComparisonState()
+  PickerOutput([])
+  assert_equal(state, ComparisonState())
+  for output in [0, row, [1], ['not a row'], [row, row], ['query', row], ['ctrl-x', row],
+      [row .. ' forged'], [row[0 : strlen(row) - 2]], [Ref('branch-target')]]
+    PickerOutput(output, true)
+    assert_equal(state, ComparisonState(), 'branch callback rejects malformed/non-source output as a whole')
+  endfor
+  g:diffview_test_picker_throw = 1
+  var captured_spec = g:diffview_test_picker_spec
+  try
+    Reject('DiffviewBranch')
+    assert_equal(state, ComparisonState(), 'branch picker creation failure preserves old state')
+  finally
+    g:diffview_test_picker_throw = 0
+    g:diffview_test_picker_spec = captured_spec
+  endtry
+  var oid = Ref('branch-target')
+  var object = repo .. '/.git/objects/' .. oid[0 : 1] .. '/' .. oid[2 : ]
+  try
+    assert_equal(0, rename(object, test_tmp .. '/branch-object.saved'))
+    PickerOutput([row], true)
+    assert_equal(state, ComparisonState(), 'captured target read error cannot replace old view')
+  finally
+    assert_equal(0, rename(test_tmp .. '/branch-object.saved', object))
+  endtry
+  augroup DiffviewBranchRenderFailure
+    autocmd FileType nerdtree throw 'fixture branch selected render failure'
+  augroup END
+  try
+    PickerOutput([row], true)
+    assert_equal(state, ComparisonState(), 'branch selected-view renderer failure rolls back')
+  finally
+    augroup DiffviewBranchRenderFailure
+      autocmd!
+    augroup END
+  endtry
+  PickerOutput([row])
+  Pair(['TARGET src'], ['MAIN src'])
+  BranchSources('BR_LOCAL_PICK')
+  BranchNoWrites(first_call)
+  DiffviewClose
+enddef
+
+def BranchOwnedJobsQuiet(): bool
+  var quiet = 0
+  var started = reltime()
+  while quiet < 3 && reltimefloat(reltime(started)) < 5.0
+    sleep 20m
+    var pending = filter(copy(g:diffview_test_started_picker_jobs), (_, job) => job_status(job) == 'run'
+      || index(['open', 'buffered'], ch_status(job_getchannel(job))) >= 0)
+    quiet = empty(pending) ? quiet + 1 : 0
+  endwhile
+  return quiet >= 3
+enddef
+
+def BranchLifecycle()
+  var first_call = len(PickerGitCalls())
+  execute 'cd ' .. fnameescape(test_tmp .. '/branch repo')
+  var repo = getcwd()
+  var elsewhere = resolve(test_tmp .. '/picker-elsewhere')
+  edit shared.txt
+  setline(1, ['UNSAVED branch lifecycle caller'])
+  set nohidden autowrite autowriteall
+  setlocal bufhidden=wipe number spell nowinfixwidth nowinfixheight
+  var userbuf = bufnr()
+  var origin = win_getid()
+  var options = WindowOptions(origin)
+  BranchStart('BR_LOCAL_PICK', ['src'])
+  Pair(['TARGET src'], ['MAIN src'])
+  SeedRegisters()
+  var records: list<any> = []
+  for layout in ['default', 'enew']
+    win_gotoid(origin)
+    execute 'tcd ' .. fnameescape(repo)
+    var cwd = [getcwd(), getcwd(-1), haslocaldir()]
+    assert_equal(2, cwd[2])
+    if layout == 'enew'
+      g:fzf_layout = {window: 'enew'}
+    else
+      unlet! g:fzf_layout
+    endif
+    var state = ComparisonState()
+    BranchFiltered('NO_BRANCH_MATCH_96b5', ['src'])
+    win_gotoid(Role('panel').winid)
+    win_gotoid(origin)
+    sleep 40m
+    assert_equal(state, ComparisonState(), layout .. ' no match preserves caller/view/resources')
+    assert_equal(cwd, [getcwd(), getcwd(-1), haslocaldir()], layout .. ' initial tcd remains tab-local')
+    $FZF_DEFAULT_OPTS = '--bind=start:abort'
+    BranchStart('', ['src'])
+    WaitPicker()
+    assert_equal(state, ComparisonState(), layout .. ' binary abort leaves old view and dirty caller')
+    $FZF_DEFAULT_OPTS = ''
+    BranchStart('', ['src'])
+    var terminals = getbufinfo()->filter((_, b) => getbufvar(b.bufnr, '&filetype') == 'fzf')
+    assert_equal(1, len(terminals), 'one actual branch picker terminal')
+    var picker = terminals[0].bufnr
+    if layout == 'default'
+      assert_false(empty(popup_list()), 'default branch picker is a real popup')
+    else
+      assert_equal(origin, win_getid(), 'enew branch picker is in the caller')
+    endif
+    win_execute(origin, 'tcd ' .. fnameescape(elsewhere))
+    var location = win_id2tabwin(origin)
+    assert_equal([elsewhere, 2], [getcwd(location[1], location[0]), haslocaldir(location[1], location[0])])
+    term_sendkeys(picker, 'BR_LOCAL_PICK')
+    var stable = 0
+    var started = reltime()
+    while stable < 2 && reltimefloat(reltime(started)) < 5.0
+      term_wait(picker, 20)
+      var screen = mapnew(range(1, term_getsize(picker)[0]), (_, row) => term_getline(picker, row))
+      var query = !empty(filter(copy(screen), (_, line) => line =~ 'BR_LOCAL_PICK[ │]*$'))
+      var one = !empty(filter(copy(screen), (_, line) => line =~ '\<1/7\>'))
+      stable = query && one ? stable + 1 : 0
+    endwhile
+    assert_true(stable >= 2, 'real branch query and unique match are visible before Enter')
+    term_sendkeys(picker, "\<CR>")
+    WaitPicker()
+    Pair(['TARGET src'], ['MAIN src'])
+    BranchSources('BR_LOCAL_PICK')
+    location = win_id2tabwin(origin)
+    assert_equal([elsewhere, 2], [getcwd(location[1], location[0]), haslocaldir(location[1], location[0])],
+      layout .. ' keeps latest user tcd while selecting in original repo')
+    win_gotoid(origin)
+    execute 'tcd ' .. fnameescape(repo)
+    $FZF_DEFAULT_OPTS = ''
+    var sleeper = job_start(['/bin/sleep', '30'], {in_io: 'null', out_io: 'null', err_io: 'null'})
+    try
+      g:diffview_test_prior_jobs = job_info()
+      g:diffview_test_started_picker_jobs = []
+      var prior_popups = popup_list()
+      state = ComparisonState()
+      augroup DiffviewBranchLiveFailure
+        execute 'autocmd FileType fzf legacy call ' .. expand('<SID>') .. 'PickerFileTypeFailure()'
+      augroup END
+      Reject('DiffviewBranch -- src')
+      assert_true(len(g:diffview_test_started_picker_jobs) > 0, 'fault follows an actual live branch job')
+      assert_true(BranchOwnedJobsQuiet())
+      assert_equal('run', job_status(sleeper), 'branch rollback leaves unrelated user job running')
+      assert_equal(prior_popups, popup_list(), 'only the owned popup is removed')
+      var messages = execute('messages') .. v:errmsg
+      assert_match('fixture picker post-terminal FileType failure', messages)
+      assert_notmatch('E948\|E994', messages)
+      assert_equal(state, ComparisonState(), layout .. ' live-job fault restores full state')
+      assert_equal(cwd, [getcwd(), getcwd(-1), haslocaldir()])
+      add(records, {layout: layout, actual_jobs_started: len(g:diffview_test_started_picker_jobs),
+        latest_tcd_preserved: true, owned_jobs_quiet: true, unrelated_job_running: true})
+    finally
+      augroup DiffviewBranchLiveFailure
+        autocmd!
+      augroup END
+      if job_status(sleeper) == 'run'
+        job_stop(sleeper)
+      endif
+    endtry
+    assert_equal(options, WindowOptions(origin))
+    assert_equal([false, true, true], [&hidden, &autowrite, &autowriteall])
+    assert_true(getbufvar(userbuf, '&modified'))
+    assert_equal(['UNSAVED branch lifecycle caller'], getbufline(userbuf, 1, '$'))
+    assert_equal(['DISK branch dirt'], readfile(repo .. '/shared.txt'))
+  endfor
+  g:fzf_layout = {window: 'enew | throw "fixture branch layout failure"'}
+  var state = ComparisonState()
+  Reject('DiffviewBranch')
+  WaitPicker()
+  assert_equal(state, ComparisonState(), 'branch pre-terminal creation failure restores old state')
+  BranchNoWrites(first_call)
+  writefile([json_encode({scope: 'real core/binary headless actor and abort, not outer PTY', layouts: records})],
+    test_tmp .. '/branch-lifecycle.facts.json')
+  DiffviewClose
+enddef
+
 try
   assert_true(has('vim9script'))
   assert_true(has('diff'))
@@ -2827,8 +3247,9 @@ try
     runtime plugin/NERD_tree.vim
     assert_equal(2, exists(':NERDTree'), 'real NERDTree commands are loaded')
   endif
-  if (case_name =~ '^picker_' || case_name == 'reading_filter') && case_name != 'picker_missing'
-    if case_name == 'picker_api'
+  if (case_name =~ '^picker_' || case_name == 'reading_filter' || case_name =~ '^branch_')
+      && index(['picker_missing', 'branch_direct'], case_name) < 0
+    if case_name == 'picker_api' || case_name == 'branch_api'
       &runtimepath = $FZF_RUNTIME .. ',' .. &runtimepath
       runtime plugin/fzf.vim
       &runtimepath = harness_root .. '/tests/picker-api,' .. &runtimepath
@@ -2842,7 +3263,7 @@ try
       assert_true(has('terminal'), 'filtered core integration uses a real Vim terminal job')
     endif
   endif
-  if case_name =~ '^picker_' || case_name == 'reading_filter'
+  if case_name =~ '^picker_' || case_name == 'reading_filter' || case_name =~ '^branch_'
     g:fzf_layout = {down: 8}
   endif
   runtime plugin/main.vim
@@ -2930,6 +3351,14 @@ try
     ReadingFilter()
   elseif case_name == 'reading_stats'
     ReadingStats()
+  elseif case_name == 'branch_direct'
+    BranchDirect()
+  elseif case_name == 'branch_real'
+    BranchReal()
+  elseif case_name == 'branch_api'
+    BranchApi()
+  elseif case_name == 'branch_lifecycle'
+    BranchLifecycle()
   else
     throw 'Unknown test case: ' .. case_name
   endif

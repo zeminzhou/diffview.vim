@@ -120,3 +120,21 @@ the complete before-image and record the same frozen candidate for these steps:
 Record actual syntax colors/tokens, paths, line numbers, summary/leaf counts,
 focus, return/close behavior and complete fixture comparisons. Headless token
 assertions and callback boundaries do not substitute for this terminal evidence.
+
+For branch acceptance, prepare diverged committed tips, local/remote-tracking
+names (including one collision), a symbolic remote HEAD alias and staged/disk/
+unsaved dirt. Preserve the complete repositories before opening the tested pin.
+
+| Branch step | Expected |
+| --- | --- |
+| Run DiffviewBranch with a local name and a full remote ref, then the current branch | Target is left, invoking committed HEAD is right; local short name wins collisions; direct endpoints exclude local dirt and same-branch is No changes |
+| Run DiffviewBranch with literal prefixes, type a local or remote name and Enter | Actual core/binary picks exactly that ref, with names/full identities, prefixes, tree rows and committed contents intact |
+| Move refs/HEAD or caller cwd while the picker runs, select and use r | Original repository and both captured OIDs remain; latest user cwd scope is kept and Refresh does not follow moved refs or reopen the picker |
+| Repeat physical Esc and Ctrl-C with an old view and dirty caller in default popup and enew | Only picker UI/jobs close; original view, dirty data, raw registers, cwd and ordinary tree remain usable |
+| Return to the comparison, filter/clear, use tree/pane keys and q | Existing reading/navigation actions still work; no orphan owned UI or unexpected Enter prompt |
+
+Record actual chosen core binary separately from PATH's version, physical
+queries/keys, layout/focus/cwd, committed source labels and complete byte
+comparisons. Keep injected callback/job faults and native editor prompts
+separate from ordinary terminal flows. Do not run the removed legacy entry
+points or infer Branch acceptance from old Commit terminal evidence.
