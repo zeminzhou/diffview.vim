@@ -569,7 +569,7 @@ def Trees()
   Pair(['LEFT shared'], ['MERGED shared'])
   call g:ToggleDiffView()
   assert_equal([], PluginBuffers(), 'legacy Toggle closes a historical view')
-  execute 'DiffviewBranch left'
+  execute 'DiffviewOpen left HEAD'
   Select('', 'shared.txt')
   Pair(['LEFT shared'], ['MERGED shared'])
   DiffviewClose
@@ -2477,9 +2477,9 @@ def ReadingFilter()
   assert_equal(literal_drive, Node('Unstaged', literal_drive).diffview_entry.path)
   DiffviewOpen
   assert_equal(full, EntryKeys())
-  var invalid_branch_state = ComparisonState()
-  Reject('DiffviewBranch --version')
-  assert_equal(invalid_branch_state, ComparisonState(), 'invalid branch option preserves the current projection/view')
+  var invalid_revision_state = ComparisonState()
+  Reject('DiffviewOpen --version HEAD')
+  assert_equal(invalid_revision_state, ComparisonState(), 'invalid revision option preserves the current projection/view')
   Select('Unstaged', 'code.py')
   var snapshots = [getbufline(Role('left').bufnr, 1, '$'), getbufline(Role('right').bufnr, 1, '$')]
   var disk = readfile('code.py', 'b')
@@ -2893,6 +2893,7 @@ def BranchDirect()
   var state = ComparisonState()
   for command in ['DiffviewBranch absent', 'DiffviewBranch HEAD', 'DiffviewBranch main^',
       'DiffviewBranch BR_TAG_NOT_BRANCH', 'DiffviewBranch refs/tags/BR_TAG_NOT_BRANCH',
+      'DiffviewBranch BR_LOCAL_ALIAS', 'DiffviewBranch refs/remotes/origin/HEAD',
       'DiffviewBranch --version', 'DiffviewBranch ^BR_LOCAL_PICK', 'DiffviewBranch main BR_LOCAL_PICK',
       'DiffviewBranch main..BR_LOCAL_PICK', 'DiffviewBranch main -- ../outside']
     Reject(command)
@@ -2912,6 +2913,7 @@ def BranchDirect()
     &runtimepath = $FZF_RUNTIME .. ',' .. &runtimepath
     runtime plugin/fzf.vim
     assert_true(exists('*fzf#exec'))
+    state = ComparisonState()
     Reject('DiffviewBranch')
     assert_equal(state, ComparisonState(), 'missing binary cannot replace the old view')
     BranchStart('BR_LOCAL_PICK')
@@ -2957,8 +2959,10 @@ def BranchReal()
     var state = ComparisonState()
     BranchFiltered('NO_BRANCH_MATCH_96b5')
     assert_equal(state, ComparisonState(), 'real binary no-match leaves the view and focus intact')
-    BranchFiltered('origin/HEAD')
-    assert_equal(state, ComparisonState(), 'symbolic remote alias is not selectable')
+    for alias in ['origin/HEAD', 'BR_LOCAL_ALIAS']
+      BranchFiltered(alias)
+      assert_equal(state, ComparisonState(), 'symbolic branch alias is not selectable: ' .. alias)
+    endfor
     BranchFiltered('origin/BR_REMOTE_PICK', ['src'])
     Pair(['TARGET src'], ['MAIN src'])
     BranchSources('origin/BR_REMOTE_PICK', item[1])
@@ -3007,6 +3011,7 @@ def BranchApi()
   var rows = g:diffview_test_picker_spec.source
   assert_equal(7, len(rows), 'all ordinary local/remote refs, including same-OID aliases, appear once')
   assert_equal([], filter(copy(rows), (_, line) => stridx(line, 'origin/HEAD') >= 0))
+  assert_equal([], filter(copy(rows), (_, line) => stridx(line, 'BR_LOCAL_ALIAS') >= 0))
   assert_equal([], filter(copy(rows), (_, line) => stridx(line, 'BR_TAG_NOT_BRANCH') >= 0))
   var collision = filter(copy(rows), (_, line) => stridx(line, 'origin/collision') >= 0)
   assert_equal(2, len(collision), 'local and remote collision rows are distinct')
@@ -3075,6 +3080,7 @@ def BranchApi()
     autocmd FileType nerdtree throw 'fixture branch selected render failure'
   augroup END
   try
+    state = ComparisonState()
     PickerOutput([row], true)
     assert_equal(state, ComparisonState(), 'branch selected-view renderer failure rolls back')
   finally
@@ -3150,6 +3156,7 @@ def BranchLifecycle()
     endif
     win_execute(origin, 'tcd ' .. fnameescape(elsewhere))
     var location = win_id2tabwin(origin)
+    var expected_global = getcwd(-1)
     assert_equal([elsewhere, 2], [getcwd(location[1], location[0]), haslocaldir(location[1], location[0])])
     term_sendkeys(picker, 'BR_LOCAL_PICK')
     var stable = 0
@@ -3169,6 +3176,7 @@ def BranchLifecycle()
     location = win_id2tabwin(origin)
     assert_equal([elsewhere, 2], [getcwd(location[1], location[0]), haslocaldir(location[1], location[0])],
       layout .. ' keeps latest user tcd while selecting in original repo')
+    assert_equal([elsewhere, expected_global], [getcwd(), getcwd(-1)], layout .. ' post-Open keeps current/global cwd')
     win_gotoid(origin)
     execute 'tcd ' .. fnameescape(repo)
     $FZF_DEFAULT_OPTS = ''
@@ -3177,10 +3185,10 @@ def BranchLifecycle()
       g:diffview_test_prior_jobs = job_info()
       g:diffview_test_started_picker_jobs = []
       var prior_popups = popup_list()
-      state = ComparisonState()
       augroup DiffviewBranchLiveFailure
         execute 'autocmd FileType fzf legacy call ' .. expand('<SID>') .. 'PickerFileTypeFailure()'
       augroup END
+      state = ComparisonState()
       Reject('DiffviewBranch -- src')
       assert_true(len(g:diffview_test_started_picker_jobs) > 0, 'fault follows an actual live branch job')
       assert_true(BranchOwnedJobsQuiet())

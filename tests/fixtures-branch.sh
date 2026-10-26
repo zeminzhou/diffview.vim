@@ -34,9 +34,10 @@ branch_graph() {
     git -C "$branch_fixture" update-ref refs/remotes/origin/collision \
         "$(cat "$test_tmp/refs/$branch_ref_prefix-root")"
     git -C "$branch_fixture" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/collision
+    git -C "$branch_fixture" symbolic-ref refs/heads/BR_LOCAL_ALIAS refs/heads/BR_LOCAL_PICK
     git -C "$branch_fixture" for-each-ref --format='%(refname)%09%(objectname)%09%(symref)' \
         refs/heads/ refs/remotes/ > "$test_tmp/$branch_ref_prefix-refs.oracle"
-    test "$(wc -l < "$test_tmp/$branch_ref_prefix-refs.oracle")" -eq 8
+    test "$(wc -l < "$test_tmp/$branch_ref_prefix-refs.oracle")" -eq 9
     test "$(git -C "$branch_fixture" merge-base BR_LOCAL_PICK main)" = \
         "$(cat "$test_tmp/refs/$branch_ref_prefix-root")"
     git -C "$branch_fixture" diff --name-only BR_LOCAL_PICK main > "$test_tmp/$branch_ref_prefix-direct.oracle"

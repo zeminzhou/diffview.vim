@@ -198,7 +198,8 @@ The two branch fixtures add two complete repository comparisons to the existing
 25. Independent Git controls distinguish direct endpoint changes from merge-base
 changes and confirm both object formats and the local/remote/symbolic-ref set.
 The former DiffBranch command and global function must be absent. Their old
-direction/dirty/invalid-input assertions now use supported Open/Branch commands;
+direction/dirty/invalid-input assertions now use supported Open commands;
+the new immutable Branch behavior is checked in its own groups.
 Toggle coverage remains. Use Open target HEAD when named refs must re-resolve on
 Refresh, or Branch when both captured tips must remain fixed.
 
