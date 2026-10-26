@@ -3357,7 +3357,7 @@ def LineHistory()
   Select('', 'src/new name.py')
   win_gotoid(Role('right').winid)
   $FZF_DEFAULT_OPTS = '--filter=HIST_EDIT'
-  execute '1,5DiffviewLineHistory'
+  execute ':1,5DiffviewLineHistory'
   WaitPicker()
   Pair(['alpha', 'keep', 'old', 'omega'], ['alpha', 'keep', 'edited', 'omega'])
   assert_equal('src/old.py', getbufvar(Role('right').bufnr, 'diffview_path'), 'line association uses NUL historical metadata')
@@ -3434,12 +3434,20 @@ def MergeBase()
   var root = Ref('history-root')
   var tip = Ref('history-tip')
   DiffviewOpen merge-target main -- src
-  var direct = EntryKeys()
+  Select('', 'src/old.py')
+  Pair(['TARGET oldpath'], [''])
+  var direct_blob = Node('', 'src/old.py').diffview_entry.oldoid
   execute 'DiffviewOpen --merge-base merge-target main -- src'
-  assert_notequal(direct, EntryKeys(), 'explicit base differs from target-tip direct endpoint comparison')
   assert_match('\cmerge-base', PaneOption('left', 'statusline'))
   assert_true(stridx(PaneOption('left', 'statusline'), root[0 : 6]) >= 0)
+  Select('', 'src/new name.py')
   assert_true(stridx(PaneOption('right', 'statusline'), tip[0 : 6]) >= 0)
+  Select('', 'src/old.py')
+  Pair(['alpha', 'keep', 'old', 'omega'], [''])
+  assert_notequal(direct_blob, Node('', 'src/old.py').diffview_entry.oldoid,
+    'explicit base has a different actual blob even when the path/status keys coincide')
+  assert_match('\cmerge-base', PaneOption('left', 'statusline'))
+  assert_true(stridx(PaneOption('left', 'statusline'), root[0 : 6]) >= 0)
   var expected = ReadingView()
   var files = [repo .. '/.git/refs/heads/main', repo .. '/.git/refs/heads/merge-target']
   var original = mapnew(files, (_, path) => readfile(path, 'b'))
@@ -3459,7 +3467,12 @@ def MergeBase()
   NoChanges()
   execute 'DiffviewOpen --merge-base ' .. root .. ' main -- src'
   assert_match('\cmerge-base', PaneOption('left', 'statusline'))
+  Select('', 'src/old.py')
+  assert_match('\cmerge-base', PaneOption('left', 'statusline'))
   execute 'DiffviewBranch --merge-base merge-target -- src'
+  assert_match('\cmerge-base', PaneOption('left', 'statusline'))
+  assert_true(stridx(PaneOption('left', 'statusline'), root[0 : 6]) >= 0)
+  Select('', 'src/old.py')
   assert_match('\cmerge-base', PaneOption('left', 'statusline'))
   assert_true(stridx(PaneOption('left', 'statusline'), root[0 : 6]) >= 0)
   expected = ReadingView()
@@ -3467,6 +3480,7 @@ def MergeBase()
   $FZF_DEFAULT_OPTS = '--filter=merge-target'
   execute 'DiffviewBranch --merge-base -- src'
   WaitPicker()
+  Select('', 'src/old.py')
   assert_equal(expected.bodies, ReadingView().bodies)
   assert_match('\cmerge-base', PaneOption('left', 'statusline'))
   var old = ComparisonState()
@@ -3490,7 +3504,7 @@ enddef
 def HistoryApi()
   execute 'cd ' .. fnameescape(test_tmp .. '/history review')
   var repo = getcwd()
-  execute 'DiffviewCommit ' .. Ref('history-merge')
+  execute 'DiffviewOpen ' .. Ref('history-root') .. ' ' .. Ref('history-merge')
   Select('', 'src/new name.py')
   win_gotoid(Role('right').winid)
   execute HistoryCommand('File')
@@ -3537,7 +3551,7 @@ def HistoryApi()
   execute 'DiffviewCommit ' .. Ref('history-move')
   Select('', 'src/new name.py')
   win_gotoid(Role('right').winid)
-  execute '1,5DiffviewLineHistory'
+  execute ':1,5DiffviewLineHistory'
   assert_equal(NativeHistoryOids('history-line-1,5'), HistoryRowsOids(), 'numeric range traces native Git, not blame fallback')
   row = PickerRow('HIST_EDIT')
   call(g:diffview_test_picker_spec.exit, [0])
