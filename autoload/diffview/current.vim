@@ -6,6 +6,7 @@ vim9script
 import autoload 'diffview/git.vim' as git
 import autoload 'diffview/tree.vim' as tree
 import autoload 'diffview/syntax.vim' as syntax
+import autoload 'diffview/history.vim' as history
 
 var view: dict<any> = {}
 var serial = 0
@@ -415,7 +416,7 @@ export def OpenRequest(args: list<string>)
     endtry
 enddef
 
-export def Open(args: list<string>, commit = false, root = '', paths: list<string> = [], labels: dict<string> = {})
+export def Open(args: list<string>, commit = false, root = '', paths: list<string> = [], labels: dict<string> = {}, selectedPath = '')
     var creating = false
     var previous: dict<any> = {}
     var previousFocus = 0
@@ -433,8 +434,15 @@ export def Open(args: list<string>, commit = false, root = '', paths: list<strin
             model.rightSource = labels.right
         endif
         model = git.Project(model, paths)
+        var initial = 0
+        if selectedPath != ''
+            initial = index(mapnew(model.entries, (_, entry) => entry.path), selectedPath)
+            if initial < 0
+                throw '[diffview] Historical file has no matching first-parent change.'
+            endif
+        endif
         var candidate = tree.Build(model)
-        var content = empty(model.entries) ? {} : git.Read(model, model.entries[0])
+        var content = empty(model.entries) ? {} : git.Read(model, model.entries[initial])
         var origin = empty(view) ? win_getid() : view.origin
         previous = view
         previousFocus = win_getid()
@@ -461,7 +469,7 @@ export def Open(args: list<string>, commit = false, root = '', paths: list<strin
         win_execute(view.windows[0], 'setlocal winfixwidth')
         tree.Install(view.windows[0], candidate)
         if !empty(model.entries)
-            Show(0, content)
+            Show(initial, content)
         else
             EmptyView()
         endif
@@ -509,7 +517,7 @@ def Selected(root: string, source: list<string>, origin: dict<any>, paths: list<
             pushed.command = 'tcd'
         endif
     endif
-    var kind = empty(snapshot) ? 'commit' : 'branch'
+    var kind = get(snapshot, 'kind', empty(snapshot) ? 'commit' : 'branch')
     if type(lines) != v:t_list
         Error('Invalid fzf ' .. kind .. ' selection.')
         return
@@ -528,6 +536,9 @@ def Selected(root: string, source: list<string>, origin: dict<any>, paths: list<
     var cwd = getcwd(-1)
     if empty(snapshot)
         Open([oid], true, root, paths)
+    elseif has_key(snapshot, 'kind')
+        var target = snapshot.targets[index(source, lines[0])]
+        Open([target.oid], true, root, [target.oldpath, target.path], {}, target.path)
     else
         OpenBranch(snapshot, snapshot.targets[index(source, lines[0])], paths)
     endif
@@ -585,7 +596,7 @@ def RollbackPicker(origin: dict<any>)
     endif
 enddef
 
-def Pick(commit: bool, paths: list<string>, mergeBase = false)
+def Pick(commit: bool, paths: list<string>, mergeBase = false, historyContext: dict<any> = {})
     try
         tree.Check()
         if !exists('*fzf#run') || !exists('*fzf#wrap') || !exists('*fzf#exec') || !executable('fzf')
@@ -594,12 +605,13 @@ def Pick(commit: bool, paths: list<string>, mergeBase = false)
         endif
         # Do not let the dependency offer to download an incompatible binary.
         fzf#exec('0.0.0', 1)
-        var root = git.Root()
-        var snapshot = commit ? {} : git.Branches(root)
-        if !commit
+        var root = empty(historyContext) ? git.Root() : historyContext.root
+        var snapshot = !empty(historyContext) ? historyContext : commit ? {} : git.Branches(root)
+        if !commit && empty(historyContext)
             snapshot.mergeBase = mergeBase
         endif
-        var source: list<string> = commit ? git.Commits(root) : mapnew(snapshot.targets, (_, target) => target.row)
+        var source: list<string> = commit && empty(historyContext) ? git.Commits(root)
+            : mapnew(snapshot.targets, (_, target) => target.row)
         if empty(source)
             throw '[diffview] No ' .. (commit ? 'commits' : 'branches') .. ' to select.'
         endif
@@ -617,12 +629,18 @@ def Pick(commit: bool, paths: list<string>, mergeBase = false)
             'cursorbind', 'foldmethod', 'foldcolumn', 'wrap']
             origin.options[name] = getwinvar(origin.window, '&' .. name)
         endfor
+        var options = ['--no-multi', '--no-print-query', '--no-expect', '--no-print0', '--no-read0',
+            '--accept-nth=..', '--delimiter=\t', '--with-nth=2..', '--nth=..',
+            '--prompt=' .. (!empty(historyContext) ? historyContext.kind .. '> ' : commit ? 'Commit> ' : 'Branch> ')]
+        if !empty(historyContext)
+            add(options, '--header=' .. git.Display(historyContext.kind .. ': first-parent, follows renames | '
+                .. historyContext.start .. ' | ' .. historyContext.path
+                .. (empty(historyContext.range) ? '' : ' | lines ' .. join(historyContext.range, ','))))
+        endif
         var picker = fzf#wrap({source: source,
             sinklist: (lines) => Selected(root, source, origin, paths, lines, snapshot),
             exit: (code) => PickerExit(origin, code),
-            options: ['--no-multi', '--no-print-query', '--no-expect', '--no-print0', '--no-read0',
-                '--accept-nth=..', '--delimiter=\t', '--with-nth=2..', '--nth=..',
-                '--prompt=' .. (commit ? 'Commit> ' : 'Branch> ')]})
+            options: options})
         try
             # An in-place fzf layout must retain the caller without saving it.
             set hidden noautowrite noautowriteall
@@ -698,6 +716,89 @@ export def Branch(args: list<string>)
             endfor
         endfor
         throw '[diffview] Branch not found: ' .. git.Display(name)
+    catch
+        Error(v:exception)
+    endtry
+enddef
+
+def HistoryContext(revision: string, explicitPath: string, lineMode: bool): dict<any>
+    var root = ''
+    var path = explicitPath
+    var start = ''
+    if explicitPath != ''
+        root = git.Root()
+    elseif !empty(view) && index(view.windows, win_getid()) >= 0 && Usable()
+        var selected = view.selected
+        var side = win_getid() == view.windows[1] ? 'left' : 'right'
+        if win_getid() == view.windows[0]
+            if lineMode
+                throw '[diffview] Line history requires a content pane or ordinary file.'
+            endif
+            var node = g:NERDTreeFileNode.GetSelected()
+            if empty(node) || !has_key(node, 'diffview_entry')
+                throw '[diffview] Select a file node for file history.'
+            endif
+            selected = node.diffview_index
+        endif
+        if selected < 0 || type(view.model[side .. 'Prefix']) != v:t_string
+            throw '[diffview] No proven committed history context.'
+        endif
+        var entry = view.model.entries[selected]
+        if (side == 'left' ? entry.oldmode : entry.newmode) == '000000'
+            throw '[diffview] EMPTY has no history start.'
+        endif
+        path = side == 'left' ? entry.oldpath : entry.path
+        var prefix = view.model[side .. 'Prefix']
+        path = (prefix == '' ? '' : prefix .. '/') .. path
+        root = view.model.root
+        start = view.model[side .. 'Commit']
+        if start == ''
+            throw '[diffview] No proven committed history start.'
+        endif
+    else
+        if &buftype != '' || bufname() == ''
+            throw '[diffview] History requires an ordinary file or an explicit file path.'
+        endif
+        var filename = expand('%:p')
+        root = git.Root(fnamemodify(filename, ':h'))
+        if stridx(filename, root .. '/') != 0
+            throw '[diffview] File is outside its repository root.'
+        endif
+        path = strpart(filename, strlen(root) + 1)
+    endif
+    start = git.Resolve(root, revision != '' ? revision : start != '' ? start : 'HEAD', 'commit')
+    return {root: root, start: start, path: path}
+enddef
+
+export def FileHistory(args: list<string>)
+    try
+        var separator = index(args, '--')
+        var revisions = separator < 0 ? copy(args) : separator == 0 ? [] : args[0 : separator - 1]
+        var paths = separator < 0 ? [] : args[separator + 1 :]
+        if len(revisions) > 1 || (separator >= 0 && len(paths) != 1)
+            throw '[diffview] Usage: DiffviewFileHistory [revision] [-- one-file]'
+        endif
+        var context = HistoryContext(get(revisions, 0, ''), get(paths, 0, ''), false)
+        context.kind = 'file history'
+        context.range = []
+        context.targets = history.Entries(context.root, context.start, context.path)
+        Pick(true, [], false, context)
+    catch
+        Error(v:exception)
+    endtry
+enddef
+
+export def LineHistory(args: list<string>, first: number, last: number)
+    try
+        if len(args) > 1 || index(args, '--') >= 0
+            throw '[diffview] Usage: [range]DiffviewLineHistory [revision]'
+        endif
+        var context = HistoryContext(get(args, 0, ''), '', true)
+        context.kind = 'line history'
+        context.range = [first, last]
+        history.Match(context.root, context.start, context.path, getline(1, '$'), &endofline, context.range)
+        context.targets = history.Entries(context.root, context.start, context.path, context.range)
+        Pick(true, [], false, context)
     catch
         Error(v:exception)
     endtry

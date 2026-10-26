@@ -34,6 +34,8 @@ enddef
 command! -nargs=* DiffviewOpen call current.OpenRequest([<f-args>])
 command! -nargs=* DiffviewCommit call current.Commit([<f-args>])
 command! -nargs=* DiffviewBranch call current.Branch([<f-args>])
+command! -nargs=* DiffviewFileHistory call current.FileHistory([<f-args>])
+command! -nargs=* -range DiffviewLineHistory call current.LineHistory([<f-args>], <line1>, <line2>)
 command! -nargs=0 DiffviewRefresh call current.Refresh()
 command! -nargs=0 DiffviewClose call current.Close()
 command! -nargs=* DiffviewFilter call current.Filter([<f-args>])

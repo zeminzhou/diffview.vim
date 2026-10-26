@@ -3,7 +3,7 @@ vim9script
 # Copyright (C) 2022 zeminzhou <zeminzhou_@outlook.com>
 # Modified 2026-10-22. Licensed under AGPL-3.0-or-later; see LICENSE.
 
-def Run(root: string, args: list<string>, allowOne = false): list<string>
+export def Run(root: string, args: list<string>, allowOne = false): list<string>
     var output = tempname()
     var errors = tempname()
     var process: job
@@ -39,7 +39,7 @@ def Text(lines: list<string>): string
 enddef
 
 # readfile(..., 'b') preserves LF as list boundaries and NUL as in-line NL.
-def NulFields(lines: list<string>): list<string>
+export def NulFields(lines: list<string>): list<string>
     var fields: list<string> = []
     var pending = ''
     for i in range(len(lines))
@@ -63,8 +63,8 @@ export def Display(path: string): string
     return strtrans(path)
 enddef
 
-export def Root(): string
-    var cwd = getcwd()
+export def Root(directory = ''): string
+    var cwd = directory == '' ? getcwd() : directory
     if Text(Run(cwd, ['rev-parse', '--is-bare-repository'])) == 'true'
         throw '[diffview] Bare repositories are unsupported.'
     endif
@@ -344,7 +344,7 @@ def Snapshot(lines: list<string>): dict<any>
     return {lines: empty(content) ? [''] : content, eol: eol, binary: binary}
 enddef
 
-def Blob(root: string, oid: string): dict<any>
+export def Blob(root: string, oid: string): dict<any>
     if oid == '' || oid =~ '^0\+$'
         return Empty()
     endif

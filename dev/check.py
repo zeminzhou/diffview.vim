@@ -1435,6 +1435,69 @@ DiffviewClose
                                    for p in branch_repo.rglob("*") if p.is_file()}
             assert before_branch_picker == after_branch_picker, "Branch picker preserves every byte/mode after declared ref actors restore"
         print("PASS: real branch fzf selection/no-match SHA1/SHA256, async tcd, default/enew live-job rollback; captured-spec fixed tips/root/prefixes and rejection")
+        before_history = {str(p.relative_to(reading)): p.read_bytes()
+                          for p in reading.rglob("*") if p.is_file()}
+        vim(reading, "let fzf_runtime = " + quote(fzf_runtime)
+            + "\nlet elsewhere = " + quote(repo) + "\n" + r'''
+let &rtp = fzf_runtime . ',' . &rtp
+runtime plugin/fzf.vim
+let g:fzf_layout = {'window': 'enew'}
+let $FZF_DEFAULT_OPTS_FILE = ''
+let $FZF_DEFAULT_OPTS = '--filter="reading root"'
+function! HistoryRole(role)
+  return filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, 'diffview_role', '') == a:role})[0].bufnr
+endfunction
+function! WaitHistory()
+  let started = reltime()
+  while reltimefloat(reltime(started)) < 5
+    sleep 10m
+    if empty(filter(job_info(), {_, j -> job_status(j) == 'run'}))
+      return
+    endif
+  endwhile
+  call assert_report('history picker did not stop')
+endfunction
+DiffviewFileHistory HEAD -- new.go
+call WaitHistory()
+call assert_equal([''], getbufline(HistoryRole('left'), 1, '$'))
+call assert_equal(['def rename():', '    return 7'], getbufline(HistoryRole('right'), 1, '$'))
+call assert_equal('old.py', getbufvar(HistoryRole('right'), 'diffview_path'))
+DiffviewRefresh
+call assert_equal('old.py', getbufvar(HistoryRole('right'), 'diffview_path'))
+DiffviewClose
+function! fzf#run(spec) abort
+  let g:history_spec = a:spec
+endfunction
+edit src/main.go
+let history_user = bufnr()
+execute 'cd ' . fnameescape(elsewhere)
+DiffviewFileHistory
+call assert_equal(2, len(g:history_spec.source), 'ordinary-file history uses file repo despite unrelated cwd')
+call assert_match('first-parent, follows renames', g:history_spec.options)
+1,2DiffviewLineHistory
+call assert_equal(1, len(g:history_spec.source), 'unchanged selected lines trace root, not every file commit')
+call g:history_spec.sinklist([g:history_spec.source[0]])
+call assert_equal(['package main', 'func main() {}'], getbufline(HistoryRole('right'), 1, '$'))
+let old_buffers = map(['panel', 'left', 'right'], {_, role -> HistoryRole(role)})
+call win_gotoid(getbufinfo(HistoryRole('left'))[0].windows[0])
+DiffviewFileHistory
+call assert_equal(old_buffers, map(['panel', 'left', 'right'], {_, role -> HistoryRole(role)}), 'EMPTY history refuses without replacing view')
+call win_gotoid(getbufinfo(HistoryRole('right'))[0].windows[0])
+1,2DiffviewLineHistory
+call assert_equal(1, len(g:history_spec.source))
+DiffviewClose
+execute 'cd ' . fnameescape(elsewhere)
+execute 'buffer ' . history_user
+call setline(1, 'DIRTY line mismatch')
+let previous_spec = g:history_spec
+DiffviewLineHistory
+call assert_true(g:history_spec is previous_spec, 'dirty line mismatch never launches a picker')
+call assert_match('committed blob exactly', execute('messages'))
+''', directory)
+        after_history = {str(p.relative_to(reading)): p.read_bytes()
+                         for p in reading.rglob("*") if p.is_file()}
+        assert before_history == after_history, "History never mutates repository files"
+        print("PASS: real file history root/rename selection, ordinary file repo context, numeric line history and dirty mismatch")
     else:
         print("NOT RUN: optional fzf picker smoke (set FZF_RUNTIME to its core checkout)")
 
