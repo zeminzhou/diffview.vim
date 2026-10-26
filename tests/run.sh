@@ -284,7 +284,7 @@ for test_case in $test_cases; do
     if [ "$test_case" = history_preview ] || [ "$test_case" = history_api ]; then
         mkdir -p "$test_tmp/preview-temp"
         export TMPDIR="$test_tmp/preview-temp"
-        export DIFFVIEW_TEST_PREVIEW_PROCESS_LOG="$test_tmp/preview-process.log"
+        export DIFFVIEW_TEST_PREVIEW_PROCESS_LOG="$test_tmp/$test_case-preview-process.log"
     fi
     if "${VIM:-vim}" -Nu NONE -U NONE -i NONE -n -es \
         -V1"$test_tmp/$test_case.vim.log" -S "$acceptance" \
