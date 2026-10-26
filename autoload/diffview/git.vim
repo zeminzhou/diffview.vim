@@ -118,14 +118,19 @@ def DiffEntries(root: string, args: list<string>, section: string, rootCommit = 
         add(entries, {section: section, status: status, oldpath: oldpath, path: path,
             oldmode: meta[0][1 :], newmode: meta[1], oldoid: meta[2], newoid: meta[3]})
     endwhile
-    var changed: dict<bool> = {}
+    var changed: dict<any> = {}
     while i < len(fields)
         var first = stridx(fields[i], "\t")
         var second = stridx(fields[i], "\t", first + 1)
         if first < 0 || second < 0
             throw '[diffview] Malformed Git numstat record.'
         endif
-        var binary = strpart(fields[i], 0, second) == "-\t-"
+        var added = strpart(fields[i], 0, first)
+        var deleted = strpart(fields[i], first + 1, second - first - 1)
+        var binary = added == '-' && deleted == '-'
+        if !binary && (added !~ '^\d\+$' || deleted !~ '^\d\+$')
+            throw '[diffview] Malformed Git numstat counts.'
+        endif
         var path = strpart(fields[i], second + 1)
         i += 1
         if path == ''
@@ -135,11 +140,17 @@ def DiffEntries(root: string, args: list<string>, section: string, rootCommit = 
             path = fields[i + 1]
             i += 2
         endif
-        changed[path] = binary
+        changed[path] = {binary: binary, added: binary ? -1 : str2nr(added),
+            deleted: binary ? -1 : str2nr(deleted)}
     endwhile
     filter(entries, (_, entry) => has_key(changed, entry.path))
     for entry in entries
-        entry.binary = changed[entry.path]
+        extend(entry, changed[entry.path])
+        if entry.status == 'U' || index([entry.oldmode, entry.newmode], '120000') >= 0
+            || index([entry.oldmode, entry.newmode], '160000') >= 0
+            entry.added = -1
+            entry.deleted = -1
+        endif
     endfor
     if section == 'Unstaged'
         filter(entries, (_, entry) => !BinaryStatOnly(root, entry))
@@ -153,10 +164,10 @@ export def Local(root: string): dict<any>
     extend(entries, DiffEntries(root, [], 'Unstaged'))
     for path in NulFields(Run(root, ['ls-files', '--others', '--exclude-standard', '-z']))
         add(entries, {section: 'Untracked', status: '?', oldpath: path, path: path,
-            oldmode: '000000', newmode: '100644', oldoid: '', newoid: ''})
+            oldmode: '000000', newmode: '100644', oldoid: '', newoid: '', added: -1, deleted: -1})
     endfor
     return {root: root, mode: 'local', args: [], entries: entries,
-        head: head == '' ? 'EMPTY' : 'HEAD ' .. head[0 : 6]}
+        leftPrefix: '', rightPrefix: '', head: head == '' ? 'EMPTY' : 'HEAD ' .. head[0 : 6]}
 enddef
 
 def Resolve(root: string, revision: string, kind: string): string
@@ -176,6 +187,61 @@ def Resolve(root: string, revision: string, kind: string): string
             .. ': ' .. v:exception
     endtry
     return ''
+enddef
+
+def TreeSource(root: string, revision: string): dict<any>
+    try
+        var commit = Resolve(root, revision, 'commit')
+        return {oid: Resolve(root, commit, 'tree'), prefix: ''}
+    catch
+    endtry
+    var tree = Resolve(root, revision, 'tree')
+    var colon = stridx(revision, ':')
+    while colon >= 0
+        try
+            var commit = Resolve(root, strpart(revision, 0, colon), 'commit')
+            var normalized = Prefixes([strpart(revision, colon + 1)])
+            var prefix = empty(normalized) ? '' : normalized[0]
+            if Resolve(root, commit .. (prefix == '' ? '' : ':' .. prefix), 'tree') == tree
+                return {oid: tree, prefix: prefix}
+            endif
+        catch
+        endtry
+        colon = stridx(revision, ':', colon + 1)
+    endwhile
+    # Tree-only expressions remain browsable without guessing a disk mapping.
+    return {oid: tree, prefix: v:null}
+enddef
+
+export def Prefixes(paths: list<string>): list<string>
+    var normalized: list<string> = []
+    var all = false
+    for path in paths
+        if path =~ '^/' || path =~ '^\a:[/\\]'
+            throw '[diffview] Filters must be repository-relative literal prefixes.'
+        endif
+        var parts = split(path, '/')
+        if index(parts, '..') >= 0
+            throw '[diffview] Parent traversal is not a path prefix.'
+        endif
+        filter(parts, (_, component) => component != '.' && component != '')
+        var prefix = join(parts, '/')
+        all = all || prefix == ''
+        if prefix != '' && index(normalized, prefix) < 0
+            add(normalized, prefix)
+        endif
+    endfor
+    return all ? [] : normalized
+enddef
+
+export def Project(model: dict<any>, paths: list<string>): dict<any>
+    var projected = copy(model)
+    projected.fullEntries = get(model, 'fullEntries', model.entries)
+    projected.paths = copy(paths)
+    projected.entries = filter(copy(projected.fullEntries), (_, entry) => empty(paths)
+        || !empty(filter(copy(paths), (_, prefix) => entry.path == prefix || entry.oldpath == prefix
+            || stridx(entry.path, prefix .. '/') == 0 || stridx(entry.oldpath, prefix .. '/') == 0)))
+    return projected
 enddef
 
 export def Comparison(root: string, args: list<string>, commit: bool): dict<any>
@@ -199,14 +265,15 @@ export def Comparison(root: string, args: list<string>, commit: bool): dict<any>
         var entries = parent == '' ? DiffEntries(root, [oid], 'Commit', true)
             : DiffEntries(root, [parent, oid], 'Commit')
         return {root: root, mode: 'commit', args: copy(args), entries: entries,
+            leftPrefix: '', rightPrefix: '',
             leftSource: parent == '' ? 'EMPTY' : revision .. '^1 ' .. parent[0 : 6],
             rightSource: revision .. ' ' .. oid[0 : 6]}
     endif
-    var left = Resolve(root, args[0], 'tree')
-    var right = Resolve(root, args[1], 'tree')
+    var left = TreeSource(root, args[0])
+    var right = TreeSource(root, args[1])
     return {root: root, mode: 'trees', args: copy(args),
-        entries: DiffEntries(root, [left, right], 'Trees'),
-        leftSource: args[0] .. ' ' .. left[0 : 6], rightSource: args[1] .. ' ' .. right[0 : 6]}
+        entries: DiffEntries(root, [left.oid, right.oid], 'Trees'), leftPrefix: left.prefix, rightPrefix: right.prefix,
+        leftSource: args[0] .. ' ' .. left.oid[0 : 6], rightSource: args[1] .. ' ' .. right.oid[0 : 6]}
 enddef
 
 def Empty(): dict<any>
@@ -258,7 +325,10 @@ def Index(root: string, path: string): dict<any>
     throw '[diffview] Index entry disappeared: ' .. Display(path) .. '; refresh the view.'
 enddef
 
-def Disk(root: string, path: string): dict<any>
+def Worktree(root: string, path: string): dict<any>
+    if path == '' || path =~ '^/' || path =~ '^\a:[/\\]' || index(split(path, '/'), '..') >= 0
+        throw '[diffview] Invalid worktree path.'
+    endif
     var filename = root
     # A leaf-only check follows links in parent directories.
     for component in split(path, '/')
@@ -274,7 +344,20 @@ def Disk(root: string, path: string): dict<any>
     if kind != 'file' || !filereadable(filename)
         throw '[diffview] Cannot read worktree file: ' .. Display(path) .. '; refresh the view.'
     endif
-    return Snapshot(readfile(filename, 'b'))
+    return {filename: filename}
+enddef
+
+export def WorktreeFile(root: string, path: string): string
+    var result = Worktree(root, path)
+    if has_key(result, 'unsupported')
+        throw '[diffview] ' .. result.unsupported
+    endif
+    return result.filename
+enddef
+
+def Disk(root: string, path: string): dict<any>
+    var result = Worktree(root, path)
+    return has_key(result, 'unsupported') ? result : Snapshot(readfile(result.filename, 'b'))
 enddef
 
 def BinaryStatOnly(root: string, entry: dict<any>): bool

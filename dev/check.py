@@ -652,6 +652,219 @@ DiffviewClose
 call assert_equal(1, tabpagenr('$'))
 ''', directory)
 
+    reading = directory / "reading"
+    reading.mkdir()
+    git(reading, "init", "-q")
+    git(reading, "config", "user.name", "Diffview Test")
+    git(reading, "config", "user.email", "diffview@example.invalid")
+    (reading / "src").mkdir()
+    (reading / "other").mkdir()
+    (reading / "src/code.py").write_text("def greet():\n    return 1\n")
+    (reading / "src/main.go").write_text("package main\nfunc main() {}\n")
+    (reading / "old.py").write_text("def rename():\n    return 7\n")
+    (reading / "other/code.py").write_text("def elsewhere():\n    return 3\n")
+    (reading / "mode").write_text("mode\n")
+    (reading / "opaque.unknown_diffview").write_text("opaque\n")
+    git(reading, "add", ".")
+    git(reading, "commit", "-qm", "reading root")
+    (reading / "old.py").rename(reading / "new.go")
+    (reading / "src/code.py").write_text("def greet():\n    return 2\n")
+    (reading / "src/main.go").write_text("package main\nfunc main() {}\n// added\n")
+    (reading / "mode").chmod(0o755)
+    git(reading, "add", ".")
+    git(reading, "commit", "-qm", "reading next")
+    (reading / "src/code.py").write_text("def greet():\n    return 4\n")
+    (reading / "untracked").write_text("untracked\n")
+    (reading / "sample.c").write_text("int main(void) { return 0; }\n")
+    (reading / "script").write_text("#!/usr/bin/env python3\n# vim: set tabstop=1:\nprint(42)\n")
+    before_reading = {str(p.relative_to(reading)): p.read_bytes()
+                      for p in reading.rglob("*") if p.is_file()}
+    vim(reading, r'''
+syntax enable
+let g:language_filetypes = 0
+augroup DiffviewReadingHooks
+  autocmd FileType python,go,c let g:language_filetypes += 1
+augroup END
+function! ReadingRole(role)
+  return filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, 'diffview_role', '') == a:role})[0].bufnr
+endfunction
+function! ReadingChoose(path)
+  let panel = ReadingRole('panel')
+  let node = filter(DiffviewEntries(), {_, n -> n.diffview_entry.path == a:path})[0]
+  call win_gotoid(getbufinfo(panel)[0].windows[0])
+  call cursor(b:NERDTree.ui.getLineNum(node), 1)
+  execute "normal \<CR>"
+  return node
+endfunction
+edit src/code.py
+call setline(1, 'UNSAVED target')
+call deletebufline(bufnr(), 2, '$')
+let target = bufnr()
+let language_hooks = g:language_filetypes
+let expression = getreginfo('=')
+set nohidden autowrite autowriteall
+DiffviewCommit HEAD -- src
+call assert_equal('panel', b:diffview_role)
+call assert_equal(2, len(DiffviewEntries()))
+let node = ReadingChoose('src/code.py')
+call assert_equal([1, 1], [node.diffview_entry.added, node.diffview_entry.deleted])
+call assert_match('+1 -1', node.displayString())
+call assert_match('2/4 entries | +2 -1', getline(3))
+call assert_match('Filter: src', getline(4))
+call assert_equal('python', getbufvar(ReadingRole('left'), '&syntax'))
+call assert_equal('python', getbufvar(ReadingRole('right'), '&syntax'))
+call assert_equal('diffview', getbufvar(ReadingRole('right'), '&filetype'))
+call assert_equal(language_hooks, g:language_filetypes, 'snapshot detection never runs ordinary language hooks')
+call assert_equal(expression, getreginfo('='))
+let right = ReadingRole('right')
+call win_gotoid(getbufinfo(right)[0].windows[0])
+call assert_match('python', synIDattr(synID(1, 1, 1), 'name'))
+let before_tick = getbufvar(right, 'changedtick')
+let previous_path = $PATH
+let $PATH = ''
+DiffviewFilter ./src//.
+let $PATH = previous_path
+call assert_equal(before_tick, getbufvar(right, 'changedtick'), 'retained selection does not reload snapshot/Git')
+DiffviewFilter nothing
+call assert_equal(['No matching changes'], getbufline(right, 1, '$'))
+call assert_equal('', getbufvar(right, '&syntax'))
+DiffviewFilter
+call assert_equal(4, len(DiffviewEntries()))
+let mode_node = ReadingChoose('mode')
+call assert_equal([0, 0], [mode_node.diffview_entry.added, mode_node.diffview_entry.deleted])
+call ReadingChoose('new.go')
+call assert_equal('python', getbufvar(ReadingRole('left'), '&syntax'))
+call assert_equal('go', getbufvar(ReadingRole('right'), '&syntax'))
+let previous_tree = b:NERDTree
+let previous_body = getbufline(right, 1, '$')
+let previous_path = $PATH
+let $PATH = ''
+DiffviewFilter src
+let $PATH = previous_path
+call assert_true(b:NERDTree is previous_tree, 'failed projection read keeps the previous tree')
+call assert_equal(previous_body, getbufline(right, 1, '$'))
+DiffviewFilter ../escape
+call assert_true(b:NERDTree is previous_tree)
+call assert_equal(previous_body, getbufline(right, 1, '$'))
+call assert_match('traversal', execute('messages'))
+DiffBranch --
+call assert_true(b:NERDTree is previous_tree, 'legacy wrapper keeps revision validation')
+function! ReadingRenderFailure() dict
+  throw 'reading renderer failure'
+endfunction
+let NativeRender = get(g:NERDTreeDirNode, 'renderToString')
+try
+  let g:NERDTreeDirNode.renderToString = function('ReadingRenderFailure')
+  DiffviewFilter src
+  call assert_true(b:NERDTree is previous_tree)
+  call assert_equal(previous_body, getbufline(right, 1, '$'))
+finally
+  let g:NERDTreeDirNode.renderToString = NativeRender
+endtry
+call ReadingChoose('src/code.py')
+augroup DiffviewReadingSyntaxFailure
+  autocmd Syntax python setlocal modifiable noreadonly | call setline(1, 'partial syntax damage') | syntax match ReadingPartial /./ | throw 'reading syntax failure'
+augroup END
+DiffviewRefresh
+augroup DiffviewReadingSyntaxFailure
+  autocmd!
+augroup END
+call assert_equal(['def greet():', '    return 2'], getbufline(right, 1, '$'))
+call assert_equal('', getbufvar(right, '&syntax'))
+call assert_false(getbufvar(right, '&modifiable'))
+call assert_true(getbufvar(right, '&readonly'))
+call assert_match('Syntax unavailable', execute('messages'))
+let go_node = ReadingChoose('src/main.go')
+let before_resources = [map(getbufinfo(), {_, b -> b.bufnr}), map(getwininfo(), {_, w -> w.winid})]
+let invoking = win_getid()
+augroup DiffviewReadingOpenFailure
+  autocmd FileType go throw 'reading real file open failure'
+augroup END
+DiffviewGotoFile
+augroup DiffviewReadingOpenFailure
+  autocmd!
+augroup END
+call assert_equal(invoking, win_getid(), 'failed real open returns to its invoking window')
+call assert_equal(before_resources, [map(getbufinfo(), {_, b -> b.bufnr}), map(getwininfo(), {_, w -> w.winid})])
+call assert_match('reading real file open failure', execute('messages'))
+call ReadingChoose('src/code.py')
+let before_resources = [map(getbufinfo(), {_, b -> b.bufnr}), map(getwininfo(), {_, w -> w.winid})]
+let invoking = win_getid()
+augroup DiffviewReadingDirtyTargetFailure
+  autocmd BufEnter */src/code.py call setline(1, 'HOOK dirty target remains') | throw 'reading dirty target BufEnter failure'
+augroup END
+DiffviewGotoFile
+augroup DiffviewReadingDirtyTargetFailure
+  autocmd!
+augroup END
+call assert_equal(invoking, win_getid())
+call assert_equal(before_resources, [map(getbufinfo(), {_, b -> b.bufnr}), map(getwininfo(), {_, w -> w.winid})])
+call assert_equal(['HOOK dirty target remains'], getbufline(target, 1, '$'))
+call assert_true(bufloaded(target) && getbufvar(target, '&modified'))
+call setbufline(target, 1, 'UNSAVED target')
+let tabs = tabpagenr('$')
+execute 'normal gf'
+call assert_equal(tabs + 1, tabpagenr('$'))
+call assert_equal(target, bufnr(), 'gf reuses the loaded dirty target')
+call assert_equal(['UNSAVED target'], getline(1, '$'))
+call assert_true(&modified)
+call assert_false(exists('b:diffview_role'))
+call assert_equal('python', &filetype)
+call assert_equal([0, 1, 1], [&hidden, &autowrite, &autowriteall])
+let user_window = win_getid()
+DiffviewClose
+call assert_false(empty(getwininfo(user_window)), 'closing comparison retains gf user tab')
+DiffviewOpen HEAD~1:src HEAD:other
+let right = ReadingRole('right')
+let left = ReadingRole('left')
+call win_gotoid(getbufinfo(left)[0].windows[0])
+call cursor(2, 1)
+DiffviewGotoFile
+call assert_equal(target, bufnr(), 'left subtree prefix maps to src/code.py')
+call assert_equal(1, line('.'), 'historical line is clamped to the dirty one-line target')
+call win_gotoid(getbufinfo(right)[0].windows[0])
+DiffviewGotoFile
+call assert_match('/other/code.py$', expand('%:p'))
+DiffviewClose
+DiffviewOpen HEAD~1^{tree} HEAD^{tree}
+let old_tabs = tabpagenr('$')
+DiffviewGotoFile
+call assert_equal(old_tabs, tabpagenr('$'), 'tree-only expression cannot guess a worktree mapping')
+call assert_match('no proven', execute('messages'))
+DiffviewClose
+DiffviewCommit HEAD -- new.go
+let right = ReadingRole('right')
+call win_gotoid(getbufinfo(ReadingRole('left'))[0].windows[0])
+let old_tabs = tabpagenr('$')
+DiffviewGotoFile
+call assert_equal(old_tabs, tabpagenr('$'), 'missing historical oldpath never creates a file')
+DiffviewClose
+DiffviewOpen -- sample.c script
+let c_node = ReadingChoose('sample.c')
+call assert_equal([-1, -1], [c_node.diffview_entry.added, c_node.diffview_entry.deleted])
+let right = ReadingRole('right')
+call assert_equal('c', getbufvar(right, '&syntax'))
+call win_gotoid(getbufinfo(right)[0].windows[0])
+call assert_match('cType', synIDattr(synID(1, 1, 1), 'name'))
+call ReadingChoose('script')
+call assert_equal('python', getbufvar(right, '&syntax'))
+call assert_equal(8, getbufvar(right, '&tabstop'), 'snapshot modelines never execute')
+DiffviewFilter untracked
+call ReadingChoose('untracked')
+call assert_equal('', getbufvar(right, '&syntax'), 'unknown filename/content clears prior syntax')
+syntax off
+DiffviewRefresh
+call assert_equal('', getbufvar(right, '&syntax'))
+DiffviewClose
+augroup DiffviewReadingHooks
+  autocmd!
+augroup END
+''', directory)
+    after_reading = {str(p.relative_to(reading)): p.read_bytes()
+                     for p in reading.rglob("*") if p.is_file()}
+    assert before_reading == after_reading, "Reading/filter/gf must preserve every fixture byte"
+    print("PASS: native syntax/isolation, numstat metadata and rows, literal projection/rollback, dirty gf and side subtree mappings")
+
     fzf_runtime = os.environ.get("FZF_RUNTIME")
     if fzf_runtime:
         if not (Path(fzf_runtime) / "plugin/fzf.vim").is_file():
@@ -753,6 +966,17 @@ for [query, left, right, oid] in [
   call assert_equal(['UNSAVED picker buffer'], getbufline(userbuf, 1, '$'))
   call assert_true(getbufvar(userbuf, '&modified'))
 endfor
+let $FZF_DEFAULT_OPTS = '--filter=merge-picker-key'
+DiffviewCommit -- file
+call WaitPicker()
+call assert_equal(['No matching changes'], getbufline(Role('right'), 1, '$'))
+call assert_equal(['Filter: file'], getbufline(Role('panel'), 4))
+DiffviewRefresh
+call assert_equal(['No matching changes'], getbufline(Role('right'), 1, '$'))
+DiffviewFilter side
+call Pair([''], ['SIDE'], merge_commit)
+DiffviewFilter
+call Pair([''], ['SIDE'], merge_commit)
 DiffviewClose
 setlocal bufhidden=wipe
 let options = [&hidden, &autowrite, &autowriteall]
@@ -856,12 +1080,13 @@ function! fzf#run(spec) abort
   let g:picker_spec = a:spec
   let g:picker_calls = get(g:, 'picker_calls', 0) + 1
 endfunction
-DiffviewCommit
+DiffviewCommit -- file
 let root_row = filter(copy(g:picker_spec.source), {_, row -> stridx(row, g:root_commit . "\t") == 0})[0]
 execute 'cd ' . fnameescape(other_repo)
 call g:picker_spec.sinklist([root_row])
 call Pair([''], ['ROOT'], root_commit)
 call assert_equal(resolve(other_repo), getcwd(), 'selection retains caller cwd while binding original repository')
+call assert_equal(['Filter: file'], getbufline(Role('panel'), 4))
 DiffviewRefresh
 call assert_equal(1, g:picker_calls, 'refresh never relaunches fzf')
 call Pair([''], ['ROOT'], root_commit)

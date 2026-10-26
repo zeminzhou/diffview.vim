@@ -113,8 +113,25 @@ export def Build(model: dict<any>, expanded: dict<number> = {}): dict<any>
     tree.diffview_entries = []
     tree.diffview_rows = {}
     tree.diffview_lines = {}
+    tree.diffview_no_match = empty(model.entries) && !empty(get(model, 'fullEntries', []))
     tree.diffview_header = ['[diffview] ' .. toupper(model.mode), model.mode == 'local'
         ? 'Disk snapshots; unsaved edits excluded' : Label(model.leftSource .. ' -> ' .. model.rightSource)]
+    var added = 0
+    var deleted = 0
+    var unknown = 0
+    for entry in model.entries
+        if entry.added < 0 || entry.deleted < 0
+            unknown += 1
+        else
+            added += entry.added
+            deleted += entry.deleted
+        endif
+    endfor
+    add(tree.diffview_header, len(model.entries) .. '/' .. len(get(model, 'fullEntries', model.entries))
+        .. ' entries | +' .. added .. ' -' .. deleted .. (unknown > 0 ? ' | ' .. unknown .. ' unknown' : ''))
+    if !empty(get(model, 'paths', []))
+        add(tree.diffview_header, 'Filter: ' .. join(mapnew(model.paths, (_, value) => Label(value)), ', '))
+    endif
     tree.root.diffview_key = 'root'
     tree.diffview_nodes.root = tree.root
     Virtual(tree.root)
@@ -145,6 +162,8 @@ export def Build(model: dict<any>, expanded: dict<number> = {}): dict<any>
         if entry.status == 'R' || entry.status == 'C'
             label ..= ' <- ' .. Label(entry.oldpath)
         endif
+        label ..= ' +' .. (entry.added < 0 ? '?' : string(entry.added))
+            .. ' -' .. (entry.deleted < 0 ? '?' : string(entry.deleted))
         var node = Child(tree, parent, label, json_encode(['entry', entry.section, entry.path]), false)
         node.diffview_entry = entry
         node.diffview_index = i
@@ -181,7 +200,7 @@ def RenderHere(tree: any)
         setlocal noreadonly modifiable
         append(0, tree.diffview_header)
         if empty(tree.diffview_entries)
-            append(line('$'), 'No changes')
+            append(line('$'), tree.diffview_no_match ? 'No matching changes' : 'No changes')
         endif
         IndexRows(tree)
         winrestview(position)

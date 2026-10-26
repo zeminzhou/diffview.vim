@@ -5,6 +5,7 @@ vim9script
 
 import autoload 'diffview/git.vim' as git
 import autoload 'diffview/tree.vim' as tree
+import autoload 'diffview/syntax.vim' as syntax
 
 var view: dict<any> = {}
 var serial = 0
@@ -95,13 +96,14 @@ def Mappings()
     nnoremap <silent> <buffer> [f <ScriptCmd>Next(-1)<CR>
     nnoremap <silent> <buffer> <Tab> <ScriptCmd>Cycle(1)<CR>
     nnoremap <silent> <buffer> <S-Tab> <ScriptCmd>Cycle(-1)<CR>
+    nnoremap <silent> <buffer> gf <ScriptCmd>GotoFile()<CR>
 enddef
 
 def Buffer(role: string): number
     var buf = bufnr()
     add(view.buffers, buf)
     execute 'silent file diffview://' .. view.token .. '/' .. role
-    setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted
+    setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted nomodeline
     setlocal nowrap nospell nomodifiable readonly
     setlocal nofoldenable foldcolumn=0 nonumber norelativenumber
     if role == 'panel'
@@ -150,6 +152,7 @@ def Show(index: number, content: dict<any>, reveal = true)
         settabwinvar(location[0], location[1], '&statusline', substitute(entry.section .. ' | ' .. git.Display(source)
             .. ' | ' .. git.Display(path), '%', '%%', 'g'))
         win_execute(win, content.diff ? 'diffthis' : 'diffoff')
+        syntax.Apply(win, path, content.diff && (side == 1 ? entry.oldmode : entry.newmode) != '000000')
     endfor
     view.selected = index
     if content.diff
@@ -158,11 +161,13 @@ def Show(index: number, content: dict<any>, reveal = true)
 enddef
 
 def EmptyView()
+    var message = empty(get(view.model, 'fullEntries', [])) ? 'No changes' : 'No matching changes'
     for side in [1, 2]
-        Put(view.buffers[side], ['No changes'], true)
+        Put(view.buffers[side], [message], true)
         win_execute(view.windows[side], 'diffoff')
+        syntax.Apply(view.windows[side], '', false)
         var location = win_id2tabwin(view.windows[side])
-        settabwinvar(location[0], location[1], '&statusline', '[diffview] No changes')
+        settabwinvar(location[0], location[1], '&statusline', '[diffview] ' .. message)
         for name in ['path', 'section', 'source']
             setbufvar(view.buffers[side], 'diffview_' .. name, '')
         endfor
@@ -236,48 +241,157 @@ export def Cycle(delta: number)
     win_gotoid(view.windows[(index + delta + 3) % 3])
 enddef
 
+def Replace(model: dict<any>, projection = false)
+    var selected = empty(model.entries) ? -1 : 0
+    var retained = false
+    if view.selected >= 0
+        var old = view.model.entries[view.selected]
+        for i in range(len(model.entries))
+            if model.entries[i].section == old.section && model.entries[i].path == old.path
+                selected = i
+                retained = projection && model.entries[i] is old
+                break
+            endif
+        endfor
+    endif
+    var content = selected < 0 || retained ? {} : git.Read(model, model.entries[selected])
+    var key = tree.CursorKey(view.windows[0], view.tree)
+    var candidate = tree.Build(model, tree.Expansion(view.tree))
+    if view.selected < 0 || !has_key(candidate.diffview_nodes, key)
+        key = 'root'
+        if selected >= 0
+            var node = candidate.diffview_entries[selected]
+            tree.ExpandParents(node)
+            key = node.diffview_key
+        endif
+    endif
+    tree.Install(view.windows[0], candidate)
+    view.model = model
+    view.tree = candidate
+    tree.Cursor(view.windows[0], candidate, key)
+    if selected < 0
+        EmptyView()
+    elseif retained
+        view.selected = selected
+    else
+        Show(selected, content, false)
+    endif
+enddef
+
 export def Refresh()
     if !Usable()
         return
     endif
     try
-        var model = git.Comparison(view.model.root, view.model.args, view.model.mode == 'commit')
-        var selected = empty(model.entries) ? -1 : 0
-        if view.selected >= 0
-            var old = view.model.entries[view.selected]
-            for i in range(len(model.entries))
-                if model.entries[i].section == old.section && model.entries[i].path == old.path
-                    selected = i
-                    break
-                endif
-            endfor
-        endif
-        var content = selected < 0 ? {} : git.Read(model, model.entries[selected])
-        var key = tree.CursorKey(view.windows[0], view.tree)
-        var candidate = tree.Build(model, tree.Expansion(view.tree))
-        if view.selected < 0 || !has_key(candidate.diffview_nodes, key)
-            key = 'root'
-            if selected >= 0
-                var node = candidate.diffview_entries[selected]
-                tree.ExpandParents(node)
-                key = node.diffview_key
-            endif
-        endif
-        tree.Install(view.windows[0], candidate)
-        view.model = model
-        view.tree = candidate
-        tree.Cursor(view.windows[0], candidate, key)
-        if selected < 0
-            EmptyView()
-        else
-            Show(selected, content, false)
-        endif
+        Replace(git.Project(git.Comparison(view.model.root, view.model.args, view.model.mode == 'commit'), view.model.paths))
     catch
         Error(v:exception)
     endtry
 enddef
 
-export def Open(args: list<string>, commit = false, root = '')
+export def Filter(paths: list<string>)
+    if !Usable()
+        Error('No active comparison.')
+        return
+    endif
+    try
+        Replace(git.Project(view.model, git.Prefixes(paths)), true)
+    catch
+        Error(v:exception)
+    endtry
+enddef
+
+export def GotoFile()
+    if !Usable()
+        Error('No active comparison.')
+        return
+    endif
+    var caller = win_getid()
+    var created = 0
+    var target = -1
+    var buffers = getbufinfo()->mapnew((_, info) => info.bufnr)
+    var windows = getwininfo()->mapnew((_, info) => info.winid)
+    var filename = ''
+    try
+        var selected = view.selected
+        var side = caller == view.windows[1] ? 1 : 2
+        var hint = index(view.windows[1 :], caller) < 0 ? 1 : line('.')
+        if caller == view.windows[0]
+            var node = g:NERDTreeFileNode.GetSelected()
+            if empty(node) || !has_key(node, 'diffview_entry')
+                throw '[diffview] Select a file node to open its worktree file.'
+            endif
+            selected = node.diffview_index
+        endif
+        if selected < 0
+            throw '[diffview] No selected file.'
+        endif
+        var entry = view.model.entries[selected]
+        var prefix = view.model[side == 1 ? 'leftPrefix' : 'rightPrefix']
+        if type(prefix) != v:t_string
+            throw '[diffview] This tree has no proven worktree path mapping.'
+        endif
+        var path = side == 1 ? entry.oldpath : entry.path
+        filename = git.WorktreeFile(view.model.root, (prefix == '' ? '' : prefix .. '/') .. path)
+        for info in getbufinfo()
+            if info.loaded && info.name != '' && resolve(info.name) == resolve(filename)
+                target = info.bufnr
+                break
+            endif
+        endfor
+        var tab = win_id2tabwin(view.windows[0])[0]
+        if target >= 0
+            execute ':' .. tab .. 'tab sbuffer ' .. target
+        else
+            execute ':' .. tab .. 'tabedit ' .. fnameescape(filename)
+        endif
+        created = win_getid()
+        cursor(min([max([1, hint]), line('$')]), 1)
+    catch
+        var failure = v:exception
+        if created == 0 && index(windows, win_getid()) < 0
+            && (bufnr() == target || (filename != '' && resolve(bufname()) == resolve(filename)))
+            created = win_getid()
+        endif
+        if created != 0 && !empty(getwininfo(created))
+            var abandoned = winbufnr(created)
+            var hidden = getbufvar(abandoned, '&bufhidden')
+            setbufvar(abandoned, '&bufhidden', 'hide')
+            try
+                win_execute(created, 'noautocmd hide close')
+            finally
+                if bufexists(abandoned)
+                    setbufvar(abandoned, '&bufhidden', hidden)
+                endif
+            endtry
+        endif
+        for info in getbufinfo()
+            # Native first-load unwind can leave a record; never wipe a live real buffer.
+            if index(buffers, info.bufnr) < 0 && !info.changed && !info.loaded && info.name == filename
+                execute 'noautocmd bwipeout ' .. info.bufnr
+            endif
+        endfor
+        win_gotoid(caller)
+        Error(failure)
+    endtry
+enddef
+
+def Arguments(args: list<string>): dict<any>
+    var separator = index(args, '--')
+    return {revisions: separator < 0 ? copy(args) : separator == 0 ? [] : args[0 : separator - 1],
+        paths: separator < 0 ? [] : git.Prefixes(args[separator + 1 :])}
+enddef
+
+export def OpenRequest(args: list<string>)
+    try
+        var request = Arguments(args)
+        Open(request.revisions, false, '', request.paths)
+    catch
+        Error(v:exception)
+    endtry
+enddef
+
+export def Open(args: list<string>, commit = false, root = '', paths: list<string> = [])
     var creating = false
     var previous: dict<any> = {}
     var previousFocus = 0
@@ -288,7 +402,7 @@ export def Open(args: list<string>, commit = false, root = '')
             throw '[diffview] Usage: DiffviewOpen [left right]'
         endif
         tree.Check()
-        var model = git.Comparison(root == '' ? git.Root() : root, args, commit)
+        var model = git.Project(git.Comparison(root == '' ? git.Root() : root, args, commit), paths)
         var candidate = tree.Build(model)
         var content = empty(model.entries) ? {} : git.Read(model, model.entries[0])
         var origin = empty(view) ? win_getid() : view.origin
@@ -342,7 +456,7 @@ export def Open(args: list<string>, commit = false, root = '')
     endtry
 enddef
 
-def SelectedCommit(root: string, source: list<string>, origin: dict<any>, lines: any)
+def SelectedCommit(root: string, source: list<string>, origin: dict<any>, paths: list<string>, lines: any)
     if get(origin, 'directoryScope', 0) == 2
         var pushed = getwinvar(origin.window, 'fzf_pushd', {})
         if get(pushed, 'origin', '') == origin.directory
@@ -366,7 +480,7 @@ def SelectedCommit(root: string, source: list<string>, origin: dict<any>, lines:
         return
     endif
     var cwd = getcwd(-1)
-    Open([oid], true, root)
+    Open([oid], true, root, paths)
     if getcwd(-1) != cwd
         # Closing a prior tab can restore the global cwd left by an in-place picker.
         var local = haslocaldir()
@@ -422,11 +536,12 @@ def RollbackPicker(origin: dict<any>)
 enddef
 
 export def Commit(args: list<string>)
-    if !empty(args)
-        Open(args, true)
-        return
-    endif
     try
+        var request = Arguments(args)
+        if !empty(request.revisions)
+            Open(request.revisions, true, '', request.paths)
+            return
+        endif
         tree.Check()
         if !exists('*fzf#run') || !exists('*fzf#wrap') || !exists('*fzf#exec') || !executable('fzf')
             throw '[diffview] Install junegunn/fzf and put fzf on PATH, or use DiffviewCommit HEAD.'
@@ -453,7 +568,7 @@ export def Commit(args: list<string>)
             origin.options[name] = getwinvar(origin.window, '&' .. name)
         endfor
         var picker = fzf#wrap({source: source,
-            sinklist: (lines) => SelectedCommit(root, source, origin, lines),
+            sinklist: (lines) => SelectedCommit(root, source, origin, request.paths, lines),
             exit: (code) => PickerExit(origin, code),
             options: ['--no-multi', '--no-print-query', '--no-expect', '--no-print0', '--no-read0',
                 '--accept-nth=..', '--delimiter=\t', '--with-nth=2..', '--nth=..', '--prompt=Commit> ']})

@@ -52,7 +52,9 @@ and NERDTREE_RUNTIME setup for developer checks.
     range syntax. Revisions must resolve to one object. Local index,
     disk and unsaved buffer changes do not enter this comparison.
 
-    Exactly zero or two arguments are accepted. Use Vim's backslash escaping
+    Exactly zero or two revisions are accepted before an optional -- separator.
+    Paths after -- are literal prefixes (see |:DiffviewFilter|).
+    Use Vim's backslash escaping
     for whitespace, for example: >
         DiffviewOpen main topic
         DiffviewOpen main:src\ dir topic:src\ dir
@@ -90,10 +92,86 @@ and NERDTREE_RUNTIME setup for developer checks.
     EMPTY to the commit, without writing a Git object. Missing parent objects
     in shallow/incomplete history cause a Git error, not a false root view.
 
-    Accept exactly one argument resolving to a commit. Labels identify the
+    Accept exactly one revision before an optional -- path separator. Labels identify the
     revision and resolved short commit IDs; entries are grouped under Commit.
     Refresh resolves an explicit named revision again, while picked IDs remain
     immutable. Other Diffview commands do not depend on fzf.
+
+                                                       *:DiffviewFilter*
+:DiffviewFilter [paths...]
+    Project the active full comparison onto repository-relative literal path
+    prefixes. No arguments or . clears the filter. Normalize ./, internal .
+    and repeated/trailing slash separators. Reject absolute paths and any ..
+    component. Match exact paths or slash-delimited descendants, case-sensitive;
+    several prefixes are ORed. Renames match old or destination path. Wildcards,
+    backslashes and Git pathspec punctuation have no special meaning.
+
+    Open and Commit accept [-- paths...] after their old revision arguments: >
+        DiffviewOpen -- src tests
+        DiffviewOpen main topic -- src
+        DiffviewCommit -- src
+        DiffviewCommit HEAD~1 -- path\ with\ spaces
+        DiffviewFilter src/core
+        DiffviewFilter
+<
+    Commit search remains full HEAD history; only the chosen commit's changed
+    paths are projected. The original repository, selected full ID and filter
+    survive refresh; the picker is not reopened. A new Open/Commit without
+    paths resets the filter. Empty paths after -- mean all.
+
+    Filter changes do not resolve refs, load history or recompute diff metadata.
+    Retain snapshots of a still-visible selected entry; otherwise safely read
+    the first visible entry. Preserve surviving directory expansion. Invalid
+    filters/read/render errors retain the old tree, filter, focus and snapshots.
+    No matching changes means changes exist outside the projection; No changes
+    means the full comparison is empty. Both clear sources and disable diff.
+
+                                                       *:DiffviewGotoFile*
+:DiffviewGotoFile
+    Open an existing current worktree file in a new ordinary tab beside the
+    comparison. The tree requires a file node and uses its destination path,
+    line1. The left pane uses oldpath and its current line; the right uses path
+    and its current line. Other windows use the selected destination, line1.
+    Clamp the numeric line hint; no semantic historical-line mapping is implied.
+
+    Reuse an already loaded target without reloading/saving dirty contents.
+    Keep caller/target edits even with nohidden/autowrite/autowriteall. Normal
+    real-file FileType and autochdir policy applies. No snapshot roles/maps or
+    readonly state are installed on the user buffer. Closing Diffview leaves
+    that user tab/buffer available. Failure returns to the invoking window and
+    cleans only this action's new resources.
+
+    Vim may itself discard hook text or reset modified flags while unwinding a
+    failed first load; those temporary native effects are not reconstructed.
+    Pre-existing caller data and loaded dirty targets remain protected.
+
+    Full commit roots have known mappings. rev:directory maps only when its
+    captured commit prefix proves the exact compared tree. Each side keeps its
+    own prefix. Tree-only expressions without such proof are unsupported for
+    this action, while remaining valid comparisons. Do not re-resolve on gf.
+    Reject missing/nonregular targets and symlink components; do not create,
+    checkout or restore any historical file. See also |diffview-syntax|.
+
+                                                       *diffview-syntax*
+    With global syntax enabled, detect each side from its logical filename
+    and snapshot bytes using native Vim resources in an isolated Vim context.
+    Historical/deleted names and shebangs need no disk file. Keep filetype=
+    diffview; do not trigger additional language FileType, ordinary BufRead,
+    indent or modeline hooks in the main Vim. Existing FileType diffview events
+    and their creation-error rollback remain supported. Syntax-off stays off.
+    Unknown/empty/nontext/no-result buffers clear stale syntax. Syntax resource
+    errors fall back to plain text with a tagged notice, correct content/EOL,
+    source labels and readonly/nomodifiable state preserved.
+
+                                                       *diffview-statistics*
+    Leaves show +N -M from the same raw/numstat query; +? -? means unknown.
+    Binary/unsupported/untracked counts are unknown. Mode-only and pure rename
+    zero/zero entries stay visible. The header counts visible/full entries and
+    sums known visible counts, adding an unknown-entry count when nonzero.
+    Staged/unstaged entries for one path count separately. Directory flags
+    summarize visible descendants; no per-node Git counting job is started.
+    The first two source/notice headers stay unchanged. Active filters have a
+    separate escaped header, and native row lookup follows the header length.
 
                                                        *:DiffviewRefresh*
 :DiffviewRefresh
@@ -117,10 +195,10 @@ and NERDTREE_RUNTIME setup for developer checks.
                 Selection retains tree focus.
     All panes:  ]f/[f next/previous file (wrap, revealing ancestors);
                 <Tab>/<S-Tab> cycle panes;
-                r refresh; q close.
+                r refresh; q close; gf open the real worktree file.
     Diff panes: ]c/[c use Vim's standard diff hunk navigation.
     All plugin mappings are buffer-local. Sections are virtual directories.
-    Filesystem mutation, ordinary file-opening, bookmarks and root/cwd-changing
+    Filesystem mutation, native NERDTree file-opening, bookmarks and root/cwd-changing
     NERDTree mappings are not installed. Other NERDTree instances are untouched.
     Directory navigation and rendering run no per-node Git commands.
     nerdtree-git-plugin is optional; flags use the comparison model rather than

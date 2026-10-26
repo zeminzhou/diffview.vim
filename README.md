@@ -122,6 +122,8 @@ Diffview does not save, reload or discard your user buffers.
 | `:DiffviewCommit` | Search HEAD history with fzf, then first parent → selected commit |
 | `:DiffviewCommit {revision}` | First parent → specified commit; no fzf required |
 | `:DiffviewRefresh` | Re-read the original repository and comparison request |
+| `:DiffviewFilter [paths...]` | Project changed entries onto literal path prefixes; no arguments clears |
+| `:DiffviewGotoFile` / `gf` | Open the current side's real worktree file in a new ordinary tab |
 | `:DiffviewClose` | Close the active view and clean up its resources |
 
 ### Local changes
@@ -170,7 +172,7 @@ Escape whitespace with Vim's command-line backslash syntax. Subtree paths in
 the sidebar are relative to the selected trees, so a file can be compared even
 when neither historical path exists in the working directory.
 
-`DiffviewOpen` accepts **zero or two arguments**. A single revision is not an
+Before an optional `--` path separator, `DiffviewOpen` accepts **zero or two revisions**. A single revision is not an
 implicit comparison with the working tree. Each argument must resolve to one
 tree; revision exclusions such as `^main` are rejected. Parent expressions such
 as `HEAD^` are valid when the parent exists.
@@ -202,7 +204,7 @@ preferences.
 
 An explicit revision bypasses fzf. Use `:DiffviewCommit HEAD` for the former
 no-argument behavior, or `:DiffviewCommit HEAD~1` to inspect an older commit
-directly. Exactly zero or one argument is accepted.
+directly. Exactly zero or one revision is accepted before an optional `--`.
 
 A picked commit stays bound to its original repository and full object ID.
 Refresh reuses that immutable ID and does not reopen the picker, even if cwd or
@@ -215,6 +217,48 @@ for display and never used as commands.
 History loading runs synchronously before fzf appears, so large histories can
 pause Vim. Unique commits on other branches, reflogs and file-specific history
 are outside this search.
+
+### Syntax, filtering and worktree navigation
+
+When Vim syntax is enabled, each content pane uses its logical filename and
+snapshot content for native language detection, including historical names and
+different extensions on each side of a rename. Its filetype stays `diffview`.
+Detection runs in an isolated Vim with only built-in runtime resources; it does
+not open a similarly named disk file or run your language FileType, modeline or
+indent hooks. The existing `FileType diffview` creation event is retained.
+Unknown, empty and nontext sides are plain. Syntax errors report a notice and
+fall back to plain text without losing the comparison. `:syntax off` is respected.
+
+Restrict any comparison with literal prefixes, or change the current projection:
+
+```vim
+:DiffviewOpen -- src tests
+:DiffviewOpen main feature/login -- src
+:DiffviewCommit -- src
+:DiffviewCommit HEAD~1 -- path\ with\ spaces
+:DiffviewFilter ./src/core tests
+:DiffviewFilter
+```
+
+Prefixes are relative to the compared trees, match exact paths or slash-delimited
+descendants and are ORed. Renames match either old or new path. `.` means all;
+absolute paths and `..` components are rejected. Wildcards and Git pathspec
+punctuation are literal. Changing the filter keeps the full comparison and any
+still-selected snapshots, without recomputing Git diff/history or resolving refs.
+Refresh remembers the filter. A new open resets it. `No matching changes` means
+the full comparison has changes outside the filter; `No changes` means it is clean.
+Commit search still searches all HEAD-reachable commits; its prefixes filter the
+selected commit, and stay bound to the original repository and full selected ID.
+
+Press `gf` on a file node or content pane, or run `:DiffviewGotoFile`. The panel
+uses the destination path and line 1; the left pane uses the old path and the
+right pane the new path, with a clamped numeric line hint. This opens the existing
+current worktree file, reusing an already loaded dirty buffer without saving or
+reloading it. The new ordinary tab stays available after closing Diffview.
+Normal real-file editor hooks apply. Commit roots and proven `rev:directory`
+prefixes can map to worktree paths; arbitrary tree-only expressions cannot.
+Missing files, symlinks and nonregular targets report an error and create nothing.
+This is numeric positioning, not semantic historical line mapping.
 
 ## Reading the file tree
 
@@ -244,6 +288,13 @@ historical paths remain selectable without creating placeholder files. A
 file-to-directory replacement can show both the deleted file and a directory
 with the same name.
 
+File leaves show `+N -M` from the same Git numstat query, or `+? -?` for unknown
+counts (including untracked/nontext entries). Zero/zero mode changes and pure
+renames stay visible. The summary counts visible/full comparison entries and
+sums known visible line changes; duplicate staged/unstaged entries count twice.
+An active filter is escaped in a separate header. The first two source/notice
+headers and the raw identity behind each rendered node remain unchanged.
+
 Spaces, Unicode and control characters in filenames are handled as raw paths.
 Control characters and literal backslashes are escaped in tree labels; selecting
 a node uses its bound comparison entry rather than parsing the displayed text.
@@ -263,6 +314,7 @@ All plugin mappings are buffer-local and use Normal mode.
 | Any Diffview pane | `]f` / `[f` | Select the next / previous file, wrapping at the ends |
 | Any Diffview pane | Tab / Shift-Tab | Cycle through the three panes |
 | Any Diffview pane | `r` | Refresh the original comparison |
+| Any Diffview pane | `gf` | Open the real worktree file in a new normal tab |
 | Any Diffview pane | `q` | Close Diffview |
 | Content panes | `]c` / `[c` | Use Vim's native next / previous diff hunk navigation |
 
