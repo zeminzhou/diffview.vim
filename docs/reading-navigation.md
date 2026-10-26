@@ -112,6 +112,14 @@ failure cleans only this action's new resources and returns to the invoking
 window with the old comparison intact. Use escaped absolute filenames/buffer
 numbers, never interpolate raw paths as Ex commands.
 
+The preservation guarantee covers pre-existing caller/target data and forbids
+plugin-driven force-save, reload or force-wipe of real user targets. It does not
+reconstruct temporary hook text or modified flags that Vim itself discards or
+resets while unwinding a failed first file load. Attribute that boundary using
+the same native open primitive, without suppressing normal real-file hooks.
+Retain strict new-file FileType failure rollback and also verify a BufEnter
+failure while reusing an already-loaded dirty target.
+
 ## Literal path projection
 
 Paths are relative to the comparison root, independent of later cwd changes. For
