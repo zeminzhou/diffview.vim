@@ -2210,6 +2210,15 @@ def GotoCheck(path: string, hint: number, key: bool = true): number
   return target
 enddef
 
+def LoadedGotoFailure()
+  if bufnr() == g:diffview_test_goto_loaded_target && g:diffview_test_goto_loaded_faults == 0
+      && win_getid() != g:diffview_test_goto_original_window
+    g:diffview_test_goto_loaded_faults += 1
+    setline(1, ['UNSAVED target from real open hook'])
+    throw 'fixture loaded target BufEnter failure'
+  endif
+enddef
+
 def ReadingGoto()
   execute 'cd ' .. fnameescape(test_tmp .. '/reading repo')
   var repo = getcwd()
@@ -2312,6 +2321,29 @@ def ReadingGoto()
     augroup DiffviewGotoFailure
       autocmd!
     augroup END
+  endtry
+  Select('Unstaged', 'nav/target.py')
+  win_gotoid(Role('right').winid)
+  g:diffview_test_goto_loaded_target = target
+  g:diffview_test_goto_original_window = targetwin
+  g:diffview_test_goto_loaded_faults = 0
+  var target_body = getbufline(target, 1, '$')
+  augroup DiffviewGotoLoadedFailure
+    autocmd BufEnter * LoadedGotoFailure()
+  augroup END
+  try
+    state = ComparisonState()
+    Reject('DiffviewGotoFile')
+    assert_equal(1, g:diffview_test_goto_loaded_faults, 'actual loaded-target open reaches the user hook')
+    assert_equal(state, ComparisonState(), 'loaded-target failure restores invoking focus and owned resources')
+    assert_true(bufloaded(target) && getbufvar(target, '&modified'), 'never wipe or unload the dirty user target')
+    assert_equal(['UNSAVED target from real open hook'] + target_body[1 : ], getbufline(target, 1, '$'),
+      'hook edits survive failed navigation')
+  finally
+    augroup DiffviewGotoLoadedFailure
+      autocmd!
+    augroup END
+    setbufline(target, 1, target_body)
   endtry
   execute 'cd ' .. fnameescape(test_tmp .. '/special')
   DiffviewOpen
@@ -2462,6 +2494,11 @@ def ReadingFilter()
     var state = ComparisonState()
     Reject('DiffviewFilter ' .. fnameescape(invalid))
     assert_equal(state, ComparisonState(), 'invalid filter is transactional')
+  endfor
+  for paths in [['.', '../code.py'], ['../code.py', '.']]
+    var state = ComparisonState()
+    Reject('DiffviewFilter ' .. join(paths, ' '))
+    assert_equal(state, ComparisonState(), 'dot does not bypass validation of the whole prefix list')
   endfor
   SetProjection(['NO_MATCH'])
   assert_equal([], Entries())
@@ -2671,7 +2708,7 @@ def ReadingStats()
   StatsHeader(full)
   var original = ComparisonState()
   try
-    for malformed in ['oops', '-2', '-']
+    for malformed in ["oops\t1", "1\toops", "-2\t1", "-\t1", "1\t-"]
       $DIFFVIEW_TEST_BAD_NUMSTAT = malformed
       Reject('DiffviewRefresh')
       assert_equal(original, ComparisonState(), 'malformed count is not silently accepted as zero')

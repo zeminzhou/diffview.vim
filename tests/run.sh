@@ -215,7 +215,7 @@ printf '\n' >> "$DIFFVIEW_TEST_GIT_LOG"
 if [ -n "${DIFFVIEW_TEST_BAD_NUMSTAT:-}" ]; then
     for argument do
         if [ "$argument" = diff ] || [ "$argument" = diff-tree ]; then
-            printf '%s\t1\tcode.py\000' "$DIFFVIEW_TEST_BAD_NUMSTAT"
+            printf '%s\tcode.py\000' "$DIFFVIEW_TEST_BAD_NUMSTAT"
             exit 0
         fi
     done

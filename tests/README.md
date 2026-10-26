@@ -122,7 +122,7 @@ Additional scenarios:
 | picker_errors | Unborn, non-Git, bare and injected Git history failure report errors without replacing the old view |
 | picker_api | Public fzf callback boundary only: original repository/full OID after cwd/ref changes; malformed, duplicate and forged rows, launch/read/render errors and immutable refresh |
 | reading_syntax | Actual built-in Python/C/shebang tokens, per-side rename and deleted names, syntax-off/unknown/empty/nontext clearing, raw EOL, modeline/FileType isolation and partial syntax error fallback |
-| reading_goto | Public gf/command opens adjacent normal tabs, clamps line hints, reuses dirty targets without saving, preserves caller/options/registers, maps rename/subtree sides, rejects unknown tree/missing/nonregular/symlink targets and rolls back a real FileType failure |
+| reading_goto | Public gf/command opens adjacent normal tabs, clamps line hints, reuses dirty targets without saving, preserves caller/options/registers, maps rename/subtree sides, rejects unknown tree/missing/nonregular/symlink targets; real FileType and loaded-target BufEnter failures restore focus/resources while retaining user hook edits |
 | reading_filter | Initial Open/Commit/fzf prefixes, local duplicate groups, rename old/new identity, segment/OR/normalization, literal control/display twins, retained selected snapshots, no diff/ref/history reload, no-match/clear/Refresh and read/native-render failure rollback |
 | reading_stats | Independent Git numstat oracle for local/tree/ordinary/root commit metadata; known zeros versus unsupported/binary/untracked unknowns, leaf/header totals and dynamic native rows; malformed-count boundary rejection |
 
