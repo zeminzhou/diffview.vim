@@ -2030,6 +2030,11 @@ def PickerApi()
   finally
     g:diffview_test_picker_throw = 0
   endtry
+  PickerOutput([row])
+  assert_equal(state, ComparisonState(), 'late sink from the failed picker instance is ignored')
+  DiffviewCommit
+  row = PickerRow('PICK_OLDER')
+  state = ComparisonState()
   var oid = Ref('picker-older')
   var object = repo .. '/.git/objects/' .. oid[0 : 1] .. '/' .. oid[2 : ]
   try
@@ -3298,7 +3303,7 @@ def FileHistory()
     assert_equal(1, len(Entries()), 'clearing a history filter retains exact file scope')
     HistoryFixedRefresh(ReadingView())
     DiffviewClose
-    HistoryFiltered('File', 'HIST_DELETE', Ref(item[1] .. '-delete'), 'src/new name.py')
+    HistoryFiltered('File', 'HIST_DELETE', Ref(item[1] .. '-child-delete'), 'src/new name.py')
     Pair(['inserted', 'edited', 'alpha', 'keep', 'omega'], [''])
     assert_equal(1, len(Entries()), 'file D selection cannot include a new directory child')
     assert_equal('D', Node('', 'src/new name.py').diffview_entry.status)
@@ -3316,6 +3321,7 @@ def FileHistory()
     HistoryFiltered('File', 'NO_HISTORY_MATCH_f92', 'review-merge', 'src/new name.py')
     assert_equal(state, ComparisonState(), 'real history no match preserves usable view and caller')
     for command in [HistoryCommand('File', '--version', 'src/new name.py'),
+        HistoryCommand('File', Ref(item[1] .. '-delete'), 'src/new name.py'),
         'DiffviewFileHistory -- src/old.py other.txt', 'DiffviewFileHistory -- .',
         'DiffviewFileHistory -- ../outside', 'DiffviewFileHistory -- /absolute',
         'DiffviewFileHistory -- src', 'DiffviewFileHistory HEAD HEAD -- other.txt',
