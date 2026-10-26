@@ -554,8 +554,8 @@ success alone does not establish terminal usability.
 - NERDTree integration is verified against the revision above. Other revisions
   and arbitrary third-party NERDTree extensions need their own checks.
 - Git runs synchronously, and concurrent repository reads are not atomic.
-- No staging, restore, checkout, editable diff buffers, file-history browser,
-  automatic refresh, path filtering or three-way merge UI is provided.
+- No staging, restore, checkout, editable diff buffers, copy-aware/DAG history,
+  automatic refresh or three-way merge UI is provided.
 - Binary, symlink, submodule and conflict entries are explained rather than
   rendered as editable or specialized comparisons.
 - Narrow terminals can clip labels; native resizing is supported. Larger
