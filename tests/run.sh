@@ -188,6 +188,7 @@ unset GIT_OPTIONAL_LOCKS
 export DIFFVIEW_TEST_REAL_GIT="$(command -v git)"
 export DIFFVIEW_TEST_GIT_LOG="$test_tmp/product-git.argv"
 : > "$DIFFVIEW_TEST_GIT_LOG"
+mkdir "$DIFFVIEW_TEST_GIT_LOG.records"
 mkdir "$test_tmp/git-bin"
 mkdir "$test_tmp/no-fzf-bin"
 ln -s "$DIFFVIEW_TEST_REAL_GIT" "$test_tmp/no-fzf-bin/git"
@@ -213,8 +214,11 @@ EOF
 chmod +x "$test_tmp/old-fzf-bin/fzf" "$test_tmp/old-fzf-core/install"
 cat > "$test_tmp/git-bin/git" <<'EOF'
 #!/bin/sh
-printf '%s\000' "$@" >> "$DIFFVIEW_TEST_GIT_LOG"
-printf '\n' >> "$DIFFVIEW_TEST_GIT_LOG"
+set -eu
+preview_record=$(mktemp "$DIFFVIEW_TEST_GIT_LOG.records/argv.XXXXXXXX")
+printf '%s\000' "$@" > "$preview_record.tmp"
+mv "$preview_record.tmp" "$preview_record"
+printf '%s\n' "${preview_record##*/}" >> "$DIFFVIEW_TEST_GIT_LOG"
 if [ -n "${DIFFVIEW_TEST_PREVIEW_PROCESS_LOG:-}" ]; then
     /bin/ps -p "$$" -o pid=,ppid=,pgid=,state=,command= >> "$DIFFVIEW_TEST_PREVIEW_PROCESS_LOG"
 fi
@@ -273,13 +277,17 @@ else
 fi
 for test_case in $test_cases; do
     export DIFFVIEW_TEST_CASE="$test_case"
+    acceptance="$root/tests/acceptance.vim"
+    if [ "$test_case" = history_preview ]; then
+        acceptance="$root/tests/preview-screen.vim"
+    fi
     if [ "$test_case" = history_preview ] || [ "$test_case" = history_api ]; then
         mkdir -p "$test_tmp/preview-temp"
         export TMPDIR="$test_tmp/preview-temp"
         export DIFFVIEW_TEST_PREVIEW_PROCESS_LOG="$test_tmp/preview-process.log"
     fi
     if "${VIM:-vim}" -Nu NONE -U NONE -i NONE -n -es \
-        -V1"$test_tmp/$test_case.vim.log" -S "$root/tests/acceptance.vim" \
+        -V1"$test_tmp/$test_case.vim.log" -S "$acceptance" \
         > "$test_tmp/$test_case.stdout" 2>&1 && [ -f "$test_tmp/$test_case.result" ]; then
         cat "$test_tmp/$test_case.result"
         if [ "$test_case" = large ]; then

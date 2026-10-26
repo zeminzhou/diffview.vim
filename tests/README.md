@@ -242,3 +242,11 @@ requiring the complete prompt/query and two settled unique-result observations;
 it does not disable preview or relax any post-selection identity/state checks.
 Worker-output commands and captured-run callbacks remain separate scopes from
 real headless fzf preview execution and the final physical-key terminal gate.
+Git argv logging uses one atomically published NUL record per invocation and a
+short append-only manifest. This preserves literal LF/empty/Unicode arguments
+and concurrent preview calls without treating a filename fragment as a query.
+Malformed or incomplete records fail the test instead of being skipped.
+The `history_preview` case runs inside a native Vim terminal at 240x60 so the
+unchanged default popup and right-half preview can display a complete commit ID.
+It still checks actual right-side cells for two settled observations; this
+headless terminal geometry check does not replace the physical-key PTY gate.

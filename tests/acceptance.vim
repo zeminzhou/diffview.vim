@@ -1429,14 +1429,37 @@ def PickerFilter(query: string)
 enddef
 
 def PickerGitCalls(): list<string>
-  return filereadable($DIFFVIEW_TEST_GIT_LOG)
-    ? readfile($DIFFVIEW_TEST_GIT_LOG, 'b')->filter((_, line) => line != '') : []
+  var calls: list<string> = []
+  if !filereadable($DIFFVIEW_TEST_GIT_LOG)
+    return calls
+  endif
+  for record in readfile($DIFFVIEW_TEST_GIT_LOG)
+    if record !~ '^argv\.\w\+$'
+      throw 'Malformed Git invocation manifest'
+    endif
+    var argv: list<string> = []
+    var argument = 0z
+    var bytes = readblob($DIFFVIEW_TEST_GIT_LOG .. '.records/' .. record)
+    if empty(bytes) || bytes[-1] != 0
+      throw 'Incomplete Git invocation record'
+    endif
+    for byte in bytes
+      if byte == 0
+        add(argv, join(blob2str(argument), "\n"))
+        argument = 0z
+      else
+        add(argument, byte)
+      endif
+    endfor
+    add(calls, json_encode(argv))
+  endfor
+  return calls
 enddef
 
 def PickerOidUsed(oid: string, first_call: number)
   var calls = PickerGitCalls()[first_call : ]
-  assert_true(!empty(filter(calls, (_, line) => index(split(line, "\n", true), 'rev-parse') >= 0
-    && index(split(line, "\n", true), oid .. '^{commit}') >= 0)),
+  assert_true(!empty(filter(calls, (_, line) => GitSubcommand(line) == 'rev-parse'
+    && index(json_decode(line), oid .. '^{commit}') >= 0)),
     'selected/refreshed commit is resolved using its full immutable OID')
 enddef
 
@@ -1798,7 +1821,7 @@ def PickerAsync()
   WaitPicker()
   Pair(['PICK ROOT'], ['PICK OLDER'])
   PickerOidUsed(Ref('picker-older'), calls)
-  assert_equal([], filter(PickerGitCalls()[calls : ], (_, line) => index(split(line, "\n", true), 'log') >= 0),
+  assert_equal([], filter(PickerGitCalls()[calls : ], (_, line) => GitSubcommand(line) == 'log'),
     'refresh reuses the full selected OID without loading picker history')
   DiffviewClose
   assert_true(win_gotoid(origin))
@@ -2446,7 +2469,7 @@ def SetProjection(paths: list<string>)
 enddef
 
 def GitSubcommand(record: string): string
-  var argv = split(record, "\n", true)
+  var argv = json_decode(record)
   # The shared argv runner places the subcommand after its -C root pair.
   var directory = index(argv, '-C')
   if directory < 0 || directory + 2 >= len(argv)
@@ -2727,7 +2750,7 @@ def ReadingStats()
   var diffs = PickerGitCalls()[first : ]->filter((_, command) => GitSubcommand(command) == 'diff')
   assert_equal(2, len(diffs), 'stats reuse the two existing local diff queries')
   for command in diffs
-    var argv = split(command, "\n", true)
+    var argv = json_decode(command)
     assert_true(index(argv, '--raw') >= 0 && index(argv, '--numstat') >= 0, 'raw and counts come from the same query')
   endfor
   for node in Entries()
@@ -3845,6 +3868,7 @@ def PreviewBoundary()
 enddef
 
 def HistoryPreview()
+  assert_true(&columns >= 240 && &lines >= 60, 'preview fixture has an actual wide native terminal grid')
   execute 'cd ' .. fnameescape(test_tmp .. '/history review')
   var repo = getcwd()
   execute 'edit ' .. fnameescape('src/new name.py')
@@ -3873,10 +3897,11 @@ def HistoryPreview()
       var terminals = getbufinfo()->filter((_, b) => getbufvar(b.bufnr, '&filetype') == 'fzf')
       assert_equal(1, len(terminals))
       var picker = terminals[0].bufnr
+      var terminal_size = term_getsize(picker)
       term_sendkeys(picker, 'HIST_ROOT')
       var screen = WaitPreview(picker, Ref('history-root'))
       assert_equal(1, len(PreviewContexts()), 'real picker owns one live context')
-      var calls = readfile($DIFFVIEW_TEST_GIT_LOG, 'b')
+      var calls = PickerGitCalls()
       assert_false(empty(filter(calls, (_, row) => GitSubcommand(row) == 'show')),
         'a real worker executed protected Git preview, not only a visible fake header')
       for item in [['HIST_EDIT', 'history-edit'], ['HIST_MERGE', 'history-merge'], ['HIST_ROOT', 'history-root']]
@@ -3934,7 +3959,8 @@ def HistoryPreview()
       assert_equal(['UNSAVED preview caller'], getbufline(caller, 1, '$'))
       assert_equal(['recreated unrelated'], readfile(repo .. '/src/new name.py'))
       state = ComparisonState()
-      add(observations, {layout: layout, real_worker_seen: true, context_removed_after_cancel_accept: true,
+      add(observations, {layout: layout, terminal_size: terminal_size,
+        real_worker_seen: true, context_removed_after_cancel_accept: true,
         actual_live_Git_fault_seen: true, foreign_job_running: true})
     endfor
   finally
