@@ -3976,6 +3976,87 @@ def HistoryPreview()
   DiffviewClose
 enddef
 
+def PromisorBytes(directory: string): dict<any>
+  var result: dict<any> = {'.': ['dir', getfperm(directory)]}
+  for name in readdir(directory)
+    var path = directory .. '/' .. name
+    var kind = getftype(path)
+    result[name] = [kind, getfperm(path), kind == 'dir' ? PromisorBytes(path) : readblob(path)]
+  endfor
+  return result
+enddef
+
+def PromisorMissing(repo: string): list<string>
+  var output = systemlist('GIT_NO_LAZY_FETCH=1 ' .. shellescape($DIFFVIEW_TEST_REAL_GIT)
+    .. ' --no-optional-locks -C ' .. shellescape(repo) .. ' rev-list --objects --missing=print HEAD')
+  assert_equal(0, v:shell_error, 'native missing-object oracle must not fetch')
+  return sort(filter(output, (_, line) => line =~ '^?'))
+enddef
+
+def HistoryPromisor()
+  var repo = test_tmp .. '/history-promisor'
+  execute 'cd ' .. fnameescape(repo)
+  edit other.txt
+  setline(1, ['root untouched'])
+  var caller = bufnr()
+  var origin = win_getid()
+  set nohidden autowrite autowriteall
+  setlocal bufhidden=wipe
+  SeedRegisters()
+  var registers = RegisterState()
+  execute 'cd ' .. fnameescape(test_tmp .. '/history review')
+  execute 'DiffviewCommit ' .. Ref('history-edit')
+  Select('', 'src/old.py')
+  execute 'cd ' .. fnameescape(repo)
+  var old = ComparisonState()
+  var bytes = PromisorBytes(repo)
+  var missing = PromisorMissing(repo)
+  assert_true(index(missing, '?' .. Ref('history-promisor-blob')) >= 0, 'promised source blob is really absent')
+  assert_equal('', $GIT_NO_LAZY_FETCH, 'product cannot borrow a native-oracle lazy-fetch guard')
+  var saved_trace = $GIT_TRACE2_EVENT
+  var trace = test_tmp .. '/history-promisor.trace.jsonl'
+  try
+    $GIT_TRACE2_EVENT = trace
+    DiffviewCommit
+    var preview = PreviewOutput(PreviewIndex('HIST_ROOT'))
+    assert_match('\[diffview\]', join(preview, "\n"), 'missing promised data is a tagged preview-local error')
+    assert_equal(old, ComparisonState(), 'preview error neither accepts nor replaces the old comparison')
+    call(g:diffview_test_picker_spec.exit, [130])
+    assert_equal([], PreviewContexts())
+    execute 'DiffviewFileHistory HEAD -- other.txt'
+    var row = PickerRow('HIST_ROOT')
+    call(g:diffview_test_picker_spec.exit, [0])
+    PickerOutput([row], true)
+    assert_equal(old, ComparisonState(), 'history acceptance cannot lazy-fetch a promised snapshot')
+    win_gotoid(origin)
+    var from_caller = ComparisonState()
+    Reject('DiffviewLineHistory')
+    assert_equal(from_caller, ComparisonState(), 'line-history content validation preserves caller/view on missing blob')
+    Reject('DiffviewCommit ' .. Ref('history-tip'))
+    assert_equal(from_caller, ComparisonState(), 'direct shared reads cannot hydrate promised blobs either')
+    assert_equal('', $GIT_NO_LAZY_FETCH, 'protected child reads must not modify the main Vim environment')
+  finally
+    $GIT_TRACE2_EVENT = saved_trace
+  endtry
+  var fetches: list<any> = []
+  for line in readfile(trace)
+    var event = json_decode(line)
+    if get(event, 'event', '') == 'child_start' && index(get(event, 'argv', []), 'fetch') >= 0
+      add(fetches, event)
+    endif
+  endfor
+  assert_equal([], fetches, 'trace records every nested child; no lazy fetch may start')
+  assert_equal(missing, PromisorMissing(repo), 'all promised blobs remain absent')
+  assert_equal(bytes, PromisorBytes(repo), 'every repo/index/object/ref/disk byte, type and mode stays unchanged')
+  assert_true(getbufvar(caller, '&modified'))
+  assert_equal(['root untouched'], getbufline(caller, 1, '$'))
+  assert_equal(registers, RegisterState())
+  writefile([json_encode({scope: 'local-only promisor; real core wrap/exec, captured-run callbacks and actual preview command',
+    missing_blobs: len(missing), fetch_children: len(fetches), inherited_lazy_guard: $GIT_NO_LAZY_FETCH,
+    missing_still_absent: true, whole_repo_bytes_modes_equal: true})], test_tmp .. '/history-promisor.facts.json')
+  DiffviewClose
+enddef
+
 try
   assert_true(has('vim9script'))
   assert_true(has('diff'))
@@ -4007,7 +4088,7 @@ try
   endif
   if (case_name =~ '^picker_' || case_name == 'reading_filter' || case_name =~ '^branch_' || case_name =~ '^history_')
       && index(['picker_missing', 'branch_direct'], case_name) < 0
-    if case_name == 'picker_api' || case_name == 'branch_api' || case_name == 'history_api'
+    if case_name == 'picker_api' || case_name == 'branch_api' || case_name == 'history_api' || case_name == 'history_promisor'
       &runtimepath = $FZF_RUNTIME .. ',' .. &runtimepath
       runtime plugin/fzf.vim
       &runtimepath = harness_root .. '/tests/picker-api,' .. &runtimepath
@@ -4127,6 +4208,8 @@ try
     HistoryApi()
   elseif case_name == 'history_preview'
     HistoryPreview()
+  elseif case_name == 'history_promisor'
+    HistoryPromisor()
   else
     throw 'Unknown test case: ' .. case_name
   endif

@@ -216,16 +216,22 @@ fixture with Commit; real wrap/exec and the original Commit lifecycle assertions
 remain intact. Filtered core selection and generated abort/term_sendkeys actors
 are headless dependency evidence, not physical-key terminal acceptance.
 
-History adds four complete repository comparisons: SHA-1 and SHA-256 review
-trails, a shallow clone and a criss-cross/unrelated-base graph. Native first-parent
+History adds five complete repository comparisons: SHA-1 and SHA-256 review
+trails, shallow/promisor clones and a criss-cross/unrelated-base graph. Native first-parent
 follow/raw and numeric -L oracles are captured before running the product; raw
 paths are not recovered from human patch headers. The planned full suite is
-50 groups and 31 whole-fixture comparisons, including all former 45/27.
+51 groups and 32 whole-fixture comparisons, including all former 45/27.
 Rename and delete commits also create a child under the former file spelling,
 then delete that child later. Exact historical-file source/view/preview checks
 must omit that unrelated child while preserving the real rename or D entry.
 The existing shallow clone also checks that a correct CID/status cannot disguise
 a missing first parent as a successful root-addition preview.
+A fresh local-only blob-filtered promisor clone checks preview, history acceptance,
+line validation and direct reads with missing blobs. Product execution receives
+no inherited lazy-fetch guard; nested fetch traces, all missing blobs and complete
+repository bytes/modes must stay unchanged. Native construction/oracle guards are
+separate from product execution. This is a captured-run/worker-output safety check,
+not a claim of physical picker coverage or support for another remote backend.
 
 The preview group uses a private temp root to observe owned source contexts.
 The existing real-Git wrapper can log PID/PGID and, only in the declared live

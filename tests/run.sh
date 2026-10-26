@@ -185,6 +185,7 @@ cksum "$test_tmp/clean/.git/index"
 
 # Do not lend the product our fixture-construction safety settings.
 unset GIT_OPTIONAL_LOCKS
+unset GIT_NO_LAZY_FETCH
 export DIFFVIEW_TEST_REAL_GIT="$(command -v git)"
 export DIFFVIEW_TEST_GIT_LOG="$test_tmp/product-git.argv"
 : > "$DIFFVIEW_TEST_GIT_LOG"
@@ -269,7 +270,7 @@ test_cases='local clean unborn nonrepo special refresh lifecycle ownership ances
     picker_real picker_no_match picker_enew picker_async picker_sha256 picker_missing picker_old_binary picker_errors picker_api
     reading_syntax reading_goto reading_filter reading_stats
     branch_direct branch_real branch_api branch_lifecycle
-    history_file history_line history_mergebase history_api history_preview'
+    history_file history_line history_mergebase history_api history_preview history_promisor'
 if [ -n "${NERDTREE_GIT_RUNTIME:-}" ]; then
     test_cases="$test_cases tree_git"
 else
@@ -314,7 +315,7 @@ diff -r "$test_tmp/reading-before" "$test_tmp/reading repo"
 diff -r "$test_tmp/reading-outside-before" "$test_tmp/reading-outside"
 diff -r "$test_tmp/branch repo-before" "$test_tmp/branch repo"
 diff -r "$test_tmp/branch-sha256-before" "$test_tmp/branch-sha256"
-for fixture in 'history review' history-review256 history-shallow history-bases; do
+for fixture in 'history review' history-review256 history-shallow history-bases history-promisor; do
     diff -r "$test_tmp/$fixture-before" "$test_tmp/$fixture"
 done
 

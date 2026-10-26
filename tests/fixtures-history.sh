@@ -167,6 +167,20 @@ git clone -q --no-local --depth=1 "$test_tmp/history review" "$test_tmp/history-
 git -C "$test_tmp/history-shallow" config core.hooksPath /dev/null
 cp -R "$test_tmp/history-shallow" "$test_tmp/history-shallow-before"
 
+# A local-only promisor clone retains commits/trees but no promised blob data.
+git -c protocol.file.allow=always clone -q --filter=blob:none --no-checkout \
+    --upload-pack='git -c uploadpack.allowFilter=true upload-pack' \
+    "file://$test_tmp/history review" "$test_tmp/history-promisor"
+GIT_NO_LAZY_FETCH=1 git -C "$test_tmp/history-promisor" rev-list --objects --missing=print HEAD \
+    > "$test_tmp/history-promisor-missing.before"
+git -C "$test_tmp/history-promisor" rev-parse HEAD:other.txt > "$test_tmp/refs/history-promisor-blob"
+if GIT_NO_LAZY_FETCH=1 git -C "$test_tmp/history-promisor" cat-file -e \
+    "$(cat "$test_tmp/refs/history-promisor-blob")" 2>/dev/null; then
+    printf 'Invalid promisor fixture: promised blob is already present\n' >&2
+    exit 1
+fi
+cp -R "$test_tmp/history-promisor" "$test_tmp/history-promisor-before"
+
 # Deliberate criss-cross: both A and B are best bases; no virtual merge is allowed.
 new_repo "$test_tmp/history-bases"
 history_bases="$test_tmp/history-bases"
