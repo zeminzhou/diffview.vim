@@ -217,7 +217,7 @@ export def Prefixes(paths: list<string>): list<string>
     var normalized: list<string> = []
     var all = false
     for path in paths
-        if path =~ '^/' || path =~ '^\a:[/\\]'
+        if isabsolutepath(path)
             throw '[diffview] Filters must be repository-relative literal prefixes.'
         endif
         var parts = split(path, '/')
@@ -326,7 +326,7 @@ def Index(root: string, path: string): dict<any>
 enddef
 
 def Worktree(root: string, path: string): dict<any>
-    if path == '' || path =~ '^/' || path =~ '^\a:[/\\]' || index(split(path, '/'), '..') >= 0
+    if path == '' || isabsolutepath(path) || index(split(path, '/'), '..') >= 0
         throw '[diffview] Invalid worktree path.'
     endif
     var filename = root

@@ -865,6 +865,47 @@ augroup END
     assert before_reading == after_reading, "Reading/filter/gf must preserve every fixture byte"
     print("PASS: native syntax/isolation, numstat metadata and rows, literal projection/rollback, dirty gf and side subtree mappings")
 
+    if os.name == "posix":
+        literal = directory / "literal drive repo"
+        literal.mkdir()
+        git(literal, "init", "-q")
+        git(literal, "config", "user.name", "Diffview Test")
+        git(literal, "config", "user.email", "diffview@example.invalid")
+        literal_name = r"C:\literal.txt"
+        (literal / literal_name).write_text("OLD\n")
+        git(literal, "add", ".")
+        git(literal, "commit", "-qm", "literal path")
+        (literal / literal_name).write_text("NEW\n")
+        before_literal = {str(p.relative_to(literal)): (p.stat().st_mode, p.read_bytes())
+                          for p in literal.rglob("*") if p.is_file()}
+        vim(literal, r'''
+DiffviewOpen
+let panel = filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, 'diffview_role', '') == 'panel'})[0].bufnr
+let tree = getbufvar(panel, 'NERDTree')
+let entry = tree.diffview_entries[0].diffview_entry
+call assert_equal('C:\literal.txt', entry.path)
+let panes = map(['left', 'right'], {_, role -> filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, 'diffview_role', '') == role})[0].bufnr})
+call assert_equal(['OLD'], getbufline(panes[0], 1, '$'))
+call assert_equal(['NEW'], getbufline(panes[1], 1, '$'))
+execute 'DiffviewFilter ' . escape(entry.path, " \t\\")
+call assert_equal(1, len(b:NERDTree.diffview_entries))
+call assert_equal(entry.path, b:NERDTree.diffview_entries[0].diffview_entry.path)
+let tree = b:NERDTree
+for invalid in ['/absolute', '../escape']
+  execute 'DiffviewFilter ' . invalid
+  call assert_true(b:NERDTree is tree, 'real absolute/traversal prefixes remain rejected')
+endfor
+DiffviewGotoFile
+call assert_equal(entry.path, expand('%:t'), 'gf keeps the POSIX literal backslash')
+call assert_equal(['NEW'], getline(1, '$'))
+call assert_false(exists('b:diffview_role'))
+DiffviewClose
+''', directory)
+        after_literal = {str(p.relative_to(literal)): (p.stat().st_mode, p.read_bytes())
+                         for p in literal.rglob("*") if p.is_file()}
+        assert before_literal == after_literal, "Literal browsing/filter/gf preserve every byte and mode"
+        print("PASS: POSIX drive-shaped raw filename Open/filter/gf, absolute/traversal rejection, bytes and modes")
+
     fzf_runtime = os.environ.get("FZF_RUNTIME")
     if fzf_runtime:
         if not (Path(fzf_runtime) / "plugin/fzf.vim").is_file():
