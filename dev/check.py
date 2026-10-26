@@ -1446,6 +1446,195 @@ finally
   call diffview#preview#Cleanup(prepared.context)
 endtry
 ''', directory)
+        scope_repo = directory / "history scope"
+        scope_repo.mkdir()
+        git(scope_repo, "init", "-q")
+        git(scope_repo, "config", "user.name", "History Test")
+        git(scope_repo, "config", "user.email", "history@example.invalid")
+        (scope_repo / "old").write_text("same\n" * 20)
+        (scope_repo / "gone").write_text("deleted file\n" * 10)
+        (scope_repo / "mode").write_text("mode-only\n")
+        (scope_repo / "binary").write_bytes(b"\0OLD\n")
+        git(scope_repo, "add", ".")
+        git(scope_repo, "commit", "-qm", "history scope root")
+        git(scope_repo, "mv", "old", "new")
+        (scope_repo / "old").mkdir()
+        (scope_repo / "old/child").write_text("UNRELATED CHILD\n")
+        git(scope_repo, "rm", "-q", "gone")
+        (scope_repo / "gone").mkdir()
+        (scope_repo / "gone/child").write_text("UNRELATED CHILD\n")
+        (scope_repo / "mode").chmod(0o755)
+        (scope_repo / "binary").write_bytes(b"\0NEW\n")
+        git(scope_repo, "add", ".")
+        git(scope_repo, "commit", "-qm", "history scope rename")
+        before_scope = {str(p.relative_to(scope_repo)): p.read_bytes()
+                        for p in scope_repo.rglob("*") if p.is_file()}
+        vim(scope_repo, "let fzf_runtime = " + quote(fzf_runtime) + "\n" + r'''
+let &rtp = fzf_runtime . ',' . &rtp
+runtime plugin/fzf.vim
+function! fzf#run(spec) abort
+  let g:scope_spec = a:spec
+endfunction
+DiffviewFileHistory -- new
+let row = filter(copy(g:scope_spec.source), {_, value -> stridx(value, 'history scope rename') >= 0})[0]
+let identity = json_decode(split(row, "\t")[0])
+let prepared = diffview#preview#Prepare(getcwd(), [{'oid': identity[0], 'paths': ['new'], 'follow': v:true}, {'oid': identity[0], 'paths': ['NO_PATH_MATCH']}, {'oid': identity[0], 'paths': []}])
+try
+  let output = system(substitute(prepared.command, '{n}', '0', 'g'))
+  call assert_match('rename from old', output)
+  call assert_match('rename to new', output)
+  call assert_notmatch('UNRELATED CHILD', output)
+  call assert_notmatch('20 insertions', output, 'historical rename preview is not a new-file diff')
+  let no_match = system(substitute(prepared.command, '{n}', '1', 'g'))
+  call assert_match('commit ' . identity[0], no_match)
+  call assert_match('history scope rename', no_match, 'message survives prefix no-match')
+  call assert_notmatch('Preview failed', no_match)
+  let mixed = system(substitute(prepared.command, '{n}', '2', 'g'))
+  call assert_notmatch('Preview error', mixed)
+  call assert_match('binary | +? -? (M)', mixed)
+  call assert_match('Binary files', mixed)
+  call assert_match('mode | +0 -0 (M)', mixed)
+  call assert_match('old mode 100644', mixed)
+  call assert_match('new mode 100755', mixed)
+finally
+  call diffview#preview#Cleanup(prepared.context)
+endtry
+call g:scope_spec.sinklist([row])
+call assert_equal(['new'], map(DiffviewEntries(), {_, n -> n.diffview_entry.path}))
+DiffviewRefresh
+call assert_equal(['new'], map(DiffviewEntries(), {_, n -> n.diffview_entry.path}))
+DiffviewFilter NO_MATCH
+DiffviewFilter
+call assert_equal(['new'], map(DiffviewEntries(), {_, n -> n.diffview_entry.path}), 'Filter clear keeps exact historical rename scope')
+DiffviewClose
+DiffviewOpen --merge-base HEAD^ HEAD -- old/child
+let left = filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, 'diffview_role', '') == 'left'})[0].bufnr
+let source = getbufvar(left, 'diffview_source')
+call assert_match('^EMPTY (merge-base(HEAD\^, HEAD)', source)
+DiffviewRefresh
+call assert_equal(source, getbufvar(left, 'diffview_source'), 'EMPTY side retains immutable review identity')
+DiffviewClose
+''', directory)
+        scope_oid = git(scope_repo, "rev-parse", "HEAD").decode().strip()
+        raw_preview = git(scope_repo, "show", "--first-parent", "--diff-merges=first-parent", "--root", "--sparse", "-M",
+                          "--format=commit %H%nAuthor: %an <%ae>%nDate: %aI%n%n%B%x00DIFFVIEW_HISTORY_PATCH:%H%x00",
+                          "--patch", "--raw", "--numstat", "--no-abbrev", "-z", scope_oid, "--")
+        count_record = b"0\t0\tmode\0"
+        assert raw_preview.count(count_record) == 1
+        malformed_context = directory / "malformed preview"
+        malformed_context.mkdir(mode=0o700)
+        context_file = malformed_context / "source.json"
+        context_file.write_text(json.dumps({"root": str(scope_repo), "members": [{"oid": scope_oid, "paths": []}]}))
+        context_file.chmod(0o600)
+        try:
+            for payload in [raw_preview.replace(count_record, b"", 1),
+                            raw_preview.replace(count_record, count_record * 2, 1),
+                            raw_preview.split(b"diff --git ", 1)[0]]:
+                worker_env = dict(TEST_ENV, DIFFVIEW_PREVIEW_MODE="render",
+                                  DIFFVIEW_PREVIEW_CONTEXT=str(malformed_context), DIFFVIEW_PREVIEW_TOKEN="0")
+                result = subprocess.run(["vim", "-Nu", "NONE", "-U", "NONE", "-i", "NONE", "--noplugin", "-n", "-es",
+                                         "--cmd", "let g:diffview_preview_worker=1", "-S", str(PLUGIN / "autoload/diffview/preview.vim")],
+                                        input=payload + b"\nDIFFVIEW_PREVIEW_STATUS:0\n", capture_output=True, env=worker_env)
+                assert result.returncode != 0 and b"[diffview] Preview error:" in result.stdout, result.stdout
+        finally:
+            context_file.unlink()
+            malformed_context.rmdir()
+        after_scope = {str(p.relative_to(scope_repo)): p.read_bytes()
+                       for p in scope_repo.rglob("*") if p.is_file()}
+        assert before_scope == after_scope, "Historical exact projection/preview preserve every repo byte"
+        git(scope_repo, "rm", "-qr", "gone")
+        git(scope_repo, "commit", "-qm", "remove historical directory")
+        before_deleted = {str(p.relative_to(scope_repo)): p.read_bytes()
+                          for p in scope_repo.rglob("*") if p.is_file()}
+        vim(scope_repo, "let fzf_runtime = " + quote(fzf_runtime) + "\n" + r'''
+let &rtp = fzf_runtime . ',' . &rtp
+runtime plugin/fzf.vim
+function! fzf#run(spec) abort
+  let g:deleted_spec = a:spec
+endfunction
+DiffviewFileHistory -- gone
+call assert_equal(2, len(g:deleted_spec.source), 'deleted-file history excludes native directory-descendant records')
+call assert_equal(-1, stridx(join(g:deleted_spec.source, "\n"), 'remove historical directory'))
+let row = filter(copy(g:deleted_spec.source), {_, value -> stridx(value, 'history scope rename') >= 0})[0]
+let identity = json_decode(split(row, "\t")[0])
+let prepared = diffview#preview#Prepare(getcwd(), [{'oid': identity[0], 'paths': ['gone'], 'follow': v:true}])
+try
+  let output = system(substitute(prepared.command, '{n}', '0', 'g'))
+  call assert_match('-deleted file', output)
+  call assert_notmatch('UNRELATED CHILD', output)
+finally
+  call diffview#preview#Cleanup(prepared.context)
+endtry
+call g:deleted_spec.sinklist([row])
+call assert_equal(['gone'], map(DiffviewEntries(), {_, n -> n.diffview_entry.path}))
+DiffviewRefresh
+DiffviewFilter NO_MATCH
+DiffviewFilter
+call assert_equal(['gone'], map(DiffviewEntries(), {_, n -> n.diffview_entry.path}))
+DiffviewClose
+''', directory)
+        after_deleted = {str(p.relative_to(scope_repo)): p.read_bytes()
+                         for p in scope_repo.rglob("*") if p.is_file()}
+        assert before_deleted == after_deleted, "Deleted historical exact scope and preview preserve repo bytes"
+        git(scope_repo, "commit", "--allow-empty", "-qm", "empty history preview")
+        empty_oid = git(scope_repo, "rev-parse", "HEAD").decode().strip()
+        vim(scope_repo, "let empty_oid = " + quote(empty_oid) + "\n" + r'''
+let prepared = diffview#preview#Prepare(getcwd(), [{'oid': empty_oid, 'paths': []}])
+try
+  let output = system(substitute(prepared.command, '{n}', '0', 'g'))
+  call assert_match('empty history preview', output)
+  call assert_match('No matching first-parent file changes', output)
+  call assert_notmatch('Preview error', output)
+finally
+  call diffview#preview#Cleanup(prepared.context)
+endtry
+''', directory)
+        print("PASS: historical rename exact scope excludes old/child through Refresh/clear; preview follows rename and retains unfiltered message")
+        shallow_repo = directory / "preview shallow"
+        shallow_repo.mkdir()
+        git(shallow_repo, "init", "-q")
+        git(shallow_repo, "config", "user.name", "Preview Test")
+        git(shallow_repo, "config", "user.email", "preview@example.invalid")
+        (shallow_repo / "file").write_text("OLD\n")
+        git(shallow_repo, "add", ".")
+        git(shallow_repo, "commit", "-qm", "parent")
+        parent = git(shallow_repo, "rev-parse", "HEAD").decode().strip()
+        (shallow_repo / "file").write_text("NEW\n")
+        git(shallow_repo, "commit", "-qam", "child")
+        child = git(shallow_repo, "rev-parse", "HEAD").decode().strip()
+        (shallow_repo / ".git/shallow").write_text(child + "\n")
+        before_shallow = {str(p.relative_to(shallow_repo)): p.read_bytes()
+                          for p in shallow_repo.rglob("*") if p.is_file()}
+        shallow_script = "let child = " + quote(child) + "\n" + r'''
+let original_env = $GIT_SHALLOW_FILE
+let prepared = diffview#preview#Prepare(getcwd(), [{'oid': child, 'paths': []}])
+try
+  let output = system(substitute(prepared.command, '{n}', '0', 'g'))
+  if missing_parent
+    call assert_match('\[diffview\] Preview failed', output)
+    call assert_notmatch('+NEW', output)
+  else
+    call assert_match('-OLD', output)
+    call assert_match('+NEW', output)
+    call assert_notmatch('new file mode', output)
+  endif
+  call assert_equal(original_env, $GIT_SHALLOW_FILE, 'only preview Git ignores shallow boundaries')
+finally
+  call diffview#preview#Cleanup(prepared.context)
+endtry
+'''
+        vim(shallow_repo, "let missing_parent = 0\n" + shallow_script, directory)
+        parent_object = shallow_repo / ".git/objects" / parent[:2] / parent[2:]
+        saved_parent = parent_object.read_bytes()
+        try:
+            parent_object.unlink()
+            vim(shallow_repo, "let missing_parent = 1\n" + shallow_script, directory)
+        finally:
+            parent_object.write_bytes(saved_parent)
+        after_shallow = {str(p.relative_to(shallow_repo)): p.read_bytes()
+                         for p in shallow_repo.rglob("*") if p.is_file()}
+        assert before_shallow == after_shallow, "Shallow preview preserves repository bytes"
+        print("PASS: mixed raw/numstat/patch association, empty message and real/missing shallow first parent")
         before_history = {str(p.relative_to(reading)): p.read_bytes()
                           for p in reading.rglob("*") if p.is_file()}
         vim(reading, "let fzf_runtime = " + quote(fzf_runtime)

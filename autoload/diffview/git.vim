@@ -292,6 +292,18 @@ export def Project(model: dict<any>, paths: list<string>): dict<any>
     return projected
 enddef
 
+export def HistoryScope(model: dict<any>, paths: list<string>, strict = false): dict<any>
+    var scoped = copy(model)
+    scoped.entries = filter(copy(get(model, 'fullEntries', model.entries)), (_, entry) =>
+        entry.path == paths[1] && (!strict || entry.oldpath == paths[0]))
+    if len(scoped.entries) != 1
+        throw '[diffview] Historical file change is unavailable at the captured commit.'
+    endif
+    scoped.fullEntries = scoped.entries
+    scoped.historyPaths = [scoped.entries[0].oldpath, scoped.entries[0].path]
+    return scoped
+enddef
+
 export def Comparison(root: string, args: list<string>, commit: bool): dict<any>
     if !commit && empty(args)
         return Local(root)
@@ -437,11 +449,12 @@ export def Read(model: dict<any>, entry: dict<any>): dict<any>
     var leftSource = localMode ? (entry.section == 'Staged' ? model.head : 'INDEX') : model.leftSource
     var rightSource = localMode ? (entry.section == 'Staged' ? 'INDEX'
         : 'WORKTREE (disk; unsaved edits excluded)') : model.rightSource
+    var baseReview = has_key(get(model, 'branchLabels', {}), 'base')
     if entry.oldmode == '000000'
-        leftSource = 'EMPTY'
+        leftSource = baseReview ? 'EMPTY (' .. leftSource .. ')' : 'EMPTY'
     endif
     if entry.newmode == '000000'
-        rightSource = 'EMPTY (absent)'
+        rightSource = baseReview ? 'EMPTY (absent; ' .. rightSource .. ')' : 'EMPTY (absent)'
     endif
     var issue = ''
     if entry.status == 'U'

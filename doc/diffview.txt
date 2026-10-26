@@ -153,7 +153,8 @@ and NERDTREE_RUNTIME setup for developer checks.
     Rows capture full commits and raw historical paths. Enter opens the normal
     first-parent full-file change with old/new rename identities. Root commits
     retain EMPTY left; a missing shallow parent is an error. Refresh retains
-    the selected commit, historical paths and repository without another picker.
+    the selected commit, historical paths and repository without another picker;
+    clearing a filter also retains that exact historical file scope.
     Rename following is Git's heuristic, not copy-aware/DAG identity tracking.
 
                                                        *:DiffviewLineHistory*
@@ -196,7 +197,7 @@ and NERDTREE_RUNTIME setup for developer checks.
     A private0700 immutable source context and restricted numeric focus token
     feed one native Vim helper/system xargs -0 pipeline. Raw metadata and paths
     never enter shell code. No interpreter, pager, external diff or textconv.
-    More than256 Git arguments/8192 transport bytes, missing/incompatible xargs
+    More than256 request fields/8192 bytes (including path selectors), missing xargs
     or failed Git shows a local tagged preview error; selection remains usable.
     No persistent preview cache or all-history patch generation.
 

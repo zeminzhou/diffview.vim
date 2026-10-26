@@ -282,7 +282,8 @@ labels. Rename detection is heuristic; copy tracking and a full DAG UI are absen
 Enter opens that historical commit's normal first-parent whole-file comparison,
 including its actual rename paths; root commits have EMPTY on the left. It does
 not create a range-only buffer. The full commit/path/repository stay fixed on
-Refresh. Esc/Ctrl-C, no match and errors preserve the previous view.
+Refresh and when clearing a filter. Esc/Ctrl-C, no match and errors preserve the
+previous view.
 
 ### Explicit merge-base review
 
@@ -312,8 +313,9 @@ Preview text escapes terminal controls and is capped at 2000 visible lines and
 work are not bounded by those display limits. The isolated native Vim worker
 uses a fixed system `xargs -0` transport; no Python/Node/pager/external diff is
 required, downloaded or executed. Raw paths/messages are data, not shell code.
-An argument request above 8192 bytes or 256 Git arguments, unavailable transport
-or Git failure gives a local tagged preview error; normal selection still works.
+An argument request above 8192 bytes or 256 fields (including path selectors),
+unavailable transport or Git failure gives a local tagged preview error; normal
+selection still works.
 No all-history patch precomputation or persistent preview cache is created.
 
 ### Syntax, filtering and worktree navigation

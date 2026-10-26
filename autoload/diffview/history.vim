@@ -32,6 +32,7 @@ export def Entries(root: string, start: string, path: string, range: list<number
         '--no-color', '--no-notes', '--no-show-signature', '--encoding=UTF-8', '--date=short',
         '--format=%x00%H%x00%ad%x00%an%x00%s%x00', start, '--', file.path]))
     var entries: list<dict<any>> = []
+    var followedPath = file.path
     var i = 0
     while i < len(fields)
         if fields[i] != '' || i + 4 >= len(fields)
@@ -46,6 +47,7 @@ export def Entries(root: string, start: string, path: string, range: list<number
         if i < len(fields) && fields[i] == ''
             i += 1
         endif
+        var nextPath = followedPath
         while i < len(fields) && (fields[i] =~ '^:' || fields[i] =~ '^\n:')
             # Only Git's fixed pretty/raw separator is removed; path bytes are untouched.
             var meta = split(substitute(fields[i], '^\n', '', ''))
@@ -62,10 +64,16 @@ export def Entries(root: string, start: string, path: string, range: list<number
                 pathAtCommit = fields[i]
                 i += 1
             endif
-            add(entries, {oid: oid, path: pathAtCommit, oldpath: oldpath,
-                row: json_encode([oid, oldpath, pathAtCommit]) .. "\t" .. git.Display(label)
-                    .. ' | ' .. git.Display(pathAtCommit)})
+            if pathAtCommit == followedPath
+                add(entries, {oid: oid, path: pathAtCommit, oldpath: oldpath,
+                    row: json_encode([oid, oldpath, pathAtCommit]) .. "\t" .. git.Display(label)
+                        .. ' | ' .. git.Display(pathAtCommit)})
+                if meta[4][0] == 'R'
+                    nextPath = oldpath
+                endif
+            endif
         endwhile
+        followedPath = nextPath
     endwhile
     if !empty(range)
         var ids = git.NulFields(git.Run(root, ['log', '--first-parent', '--no-patch', '-z',

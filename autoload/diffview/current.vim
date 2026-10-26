@@ -291,6 +291,9 @@ export def Refresh()
             model.leftSource = model.branchLabels.left
             model.rightSource = model.branchLabels.right
         endif
+        if has_key(view.model, 'historyPaths')
+            model = git.HistoryScope(model, view.model.historyPaths, true)
+        endif
         Replace(git.Project(model, view.model.paths))
     catch
         Error(v:exception)
@@ -417,7 +420,7 @@ export def OpenRequest(args: list<string>)
     endtry
 enddef
 
-export def Open(args: list<string>, commit = false, root = '', paths: list<string> = [], labels: dict<string> = {}, selectedPath = '')
+export def Open(args: list<string>, commit = false, root = '', paths: list<string> = [], labels: dict<string> = {}, selectedPath = '', historyPaths: list<string> = [])
     var creating = false
     var previous: dict<any> = {}
     var previousFocus = 0
@@ -433,6 +436,9 @@ export def Open(args: list<string>, commit = false, root = '', paths: list<strin
             model.branchLabels = copy(labels)
             model.leftSource = labels.left
             model.rightSource = labels.right
+        endif
+        if !empty(historyPaths)
+            model = git.HistoryScope(model, historyPaths)
         endif
         model = git.Project(model, paths)
         var initial = 0
@@ -507,7 +513,7 @@ enddef
 def OpenBase(root: string, left: string, right: string, leftLabel: string, rightLabel: string, paths: list<string>)
     var base = git.MergeBase(root, left, right)
     Open([base, right], false, root, paths, {left: 'merge-base(' .. leftLabel .. ', ' .. rightLabel .. ') ' .. base[0 : 6],
-        right: rightLabel .. ' ' .. right[0 : 6]})
+        right: rightLabel .. ' ' .. right[0 : 6], base: base})
 enddef
 
 def Selected(root: string, source: list<string>, origin: dict<any>, paths: list<string>, lines: any, snapshot: dict<any>)
@@ -542,7 +548,7 @@ def Selected(root: string, source: list<string>, origin: dict<any>, paths: list<
         Open([oid], true, root, paths)
     elseif has_key(snapshot, 'kind')
         var target = snapshot.targets[index(source, lines[0])]
-        Open([target.oid], true, root, [target.oldpath, target.path], {}, target.path)
+        Open([target.oid], true, root, [], {}, target.path, [target.oldpath, target.path])
     else
         OpenBranch(snapshot, snapshot.targets[index(source, lines[0])], paths)
     endif
@@ -655,7 +661,7 @@ def Pick(commit: bool, paths: list<string>, mergeBase = false, historyContext: d
         if commit
             var members: list<dict<any>> = empty(historyContext)
                 ? mapnew(source, (_, row) => ({oid: matchstr(row, '^\x\+\ze\t'), paths: copy(paths)}))
-                : mapnew(snapshot.targets, (_, target) => ({oid: target.oid, paths: [target.oldpath, target.path]}))
+                : mapnew(snapshot.targets, (_, target) => ({oid: target.oid, paths: [target.path], follow: true}))
             prepared = preview.Prepare(root, members)
             origin.preview = prepared.context
             add(options, '--preview=' .. prepared.command)
