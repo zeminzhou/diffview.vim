@@ -1,6 +1,6 @@
 # Acceptance tests
 
-The complete suite has 50 grouped scenarios and 31 whole-fixture comparisons,
+The complete suite has 51 grouped scenarios and 32 whole-fixture comparisons,
 including the delivered 45 scenarios and 27 fixtures. It compares repository
 indexes, objects, refs and worktree bytes before and after browsing.
 
