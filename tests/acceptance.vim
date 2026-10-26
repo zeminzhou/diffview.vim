@@ -3717,6 +3717,17 @@ def PreviewBoundary()
   var root = PreviewOutput(PreviewIndex('HIST_ROOT'))
   assert_match(Ref('history-root'), join(root, "\n"))
   assert_match('+alpha', join(root, "\n"), 'root preview uses EMPTY first-parent patch')
+  var shallow_marker = test_tmp .. '/history review/.git/shallow'
+  assert_false(filereadable(shallow_marker), 'present-parent control starts without a shallow marker')
+  try
+    writefile([Ref('history-edit')], shallow_marker)
+    var real_parent = PreviewOutput(PreviewIndex('HIST_EDIT'))
+    assert_match('-old', join(real_parent, "\n"))
+    assert_match('+edited', join(real_parent, "\n"))
+    assert_false(join(real_parent, "\n") =~ 'new file mode', 'preview sees the real present parent despite its shallow marker')
+  finally
+    delete(shallow_marker)
+  endtry
   try
     $DIFFVIEW_TEST_PREVIEW_BAD_OID = Ref('history-root')
     var failed = PreviewOutput(PreviewIndex('HIST_ROOT'))
@@ -3802,6 +3813,15 @@ def PreviewBoundary()
   finally
     $PATH = saved_path
   endtry
+  var before_shallow = ComparisonState()
+  execute 'cd ' .. fnameescape(test_tmp .. '/history-shallow')
+  DiffviewCommit
+  var unavailable_parent = PreviewOutput(PreviewIndex('HIST_LIMIT'))
+  assert_match('\[diffview\]', join(unavailable_parent, "\n"), 'missing real parent must not become a fake root preview')
+  assert_false(join(unavailable_parent, "\n") =~ 'new file mode\|+preview new 1')
+  assert_equal(before_shallow, ComparisonState(), 'shallow preview error leaves the old comparison intact')
+  call(g:diffview_test_picker_spec.exit, [130])
+  execute 'cd ' .. fnameescape(test_tmp .. '/history review')
 enddef
 
 def HistoryPreview()

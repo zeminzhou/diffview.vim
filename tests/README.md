@@ -224,6 +224,8 @@ paths are not recovered from human patch headers. The planned full suite is
 Rename and delete commits also create a child under the former file spelling,
 then delete that child later. Exact historical-file source/view/preview checks
 must omit that unrelated child while preserving the real rename or D entry.
+The existing shallow clone also checks that a correct CID/status cannot disguise
+a missing first parent as a successful root-addition preview.
 
 The preview group uses a private temp root to observe owned source contexts.
 The existing real-Git wrapper can log PID/PGID and, only in the declared live
