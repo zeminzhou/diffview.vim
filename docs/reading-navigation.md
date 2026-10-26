@@ -28,7 +28,9 @@ The first standalone `--` separates revisions from paths. Before it, Open still
 accepts zero or two revisions and Commit zero or one. Empty paths after `--`
 mean all paths. Without a separator, previous argument validation is unchanged.
 `DiffviewFilter` treats all its arguments as paths, not options or revisions.
-The legacy Toggle/DiffBranch wrappers keep their current behavior.
+ToggleDiffView keeps its existing behavior. The later branch-picker contract
+retires DiffBranch in favor of DiffviewBranch; use DiffviewOpen target HEAD when
+named revisions should be re-resolved on Refresh.
 
 `DiffviewCommit -- src` still searches the full HEAD-reachable commit list and
 filters the chosen commit's changed paths. This is not file-history search.

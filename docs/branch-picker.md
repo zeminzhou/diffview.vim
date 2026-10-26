@@ -26,8 +26,12 @@ More than one argument before `--` is a usage error. Prefix parsing and matching
 reuse the existing literal path-filter contract, including rename old/new paths,
 invalid-prefix rejection, clear, statistics, syntax and gf behavior.
 
-`DiffBranch` and `g:DiffBranch()` remain compatibility wrappers with their existing
-raw-revision and refresh behavior. Open and Commit retain their existing behavior.
+`DiffviewBranch` replaces the old `:DiffBranch` command and `g:DiffBranch()` global
+function. Remove both old entry points instead of retaining aliases or warning
+stubs. Migrate their documentation, developer checks and acceptance coverage.
+Users wanting a named revision to be re-resolved on Refresh can use
+`DiffviewOpen target HEAD`. Open, Commit and ToggleDiffView retain their existing
+behavior.
 
 ## Branch identity and resolution
 
@@ -96,14 +100,20 @@ performed. No new runtime dependency beyond the existing optional core fzf.
   small optional source-label/snapshot field is acceptable if needed to retain
   names over Refresh; do not change generic revision semantics to achieve it.
 - Update README, Vim help and the existing developer checks. Keep original
-  attribution and license. Tests are maintained separately from runtime.
+  attribution and license. Remove the old DiffBranch command/function definitions
+  and active usage examples; a short migration note may name the removed API.
+  Tests are maintained separately from runtime.
 - Do not add merge-base syntax, branch switching/deletion/creation, remote fetch,
   commit preview, custom layouts, async loading or new completion infrastructure.
 
 ## Acceptance
 
-1. Retain all existing 41 cases and 25 whole-fixture comparisons. New tests use
-   public commands and the existing real dependency setup. Do not weaken the
+1. Retain all existing 41 cases and 25 whole-fixture comparisons. Migrate only
+   assertions that call or require the deliberately removed DiffBranch API to
+   supported commands, retaining their underlying direction, argument-safety,
+   dirty-state and rollback coverage. Assert the old command and global function
+   are absent in a fresh plugin session. Keep ToggleDiffView coverage. New tests
+   use public commands and the existing real dependency setup. Do not weaken
    existing commit, reading, path-safety, dirty-buffer or rollback assertions.
 2. Direct local/remote/full-ref comparison checks actual left/right bytes,
    names and identities; local/remote short-name collision resolves as above.
