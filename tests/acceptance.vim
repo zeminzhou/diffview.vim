@@ -2053,6 +2053,685 @@ def PickerApi()
   DiffviewClose
 enddef
 
+def SyntaxToken(side: string, row: number, column: number): string
+  var focus = win_getid()
+  win_gotoid(Role(side).winid)
+  syntax sync fromstart
+  var name = synIDattr(synID(row, column, 1), 'name')
+  win_gotoid(focus)
+  return name
+enddef
+
+def PlainSyntax(side: string)
+  assert_equal('', getbufvar(Role(side).bufnr, '&syntax'), side .. ' clears stale syntax')
+  assert_equal('', SyntaxToken(side, 1, 1), side .. ' has no stale token groups')
+enddef
+
+def ReadingSyntax()
+  execute 'cd ' .. fnameescape(test_tmp .. '/reading repo')
+  syntax enable
+  set modeline tabstop=8
+  g:diffview_test_read_hooks = 0
+  g:diffview_test_language_hooks = 0
+  augroup DiffviewReadingHooks
+    autocmd BufRead,BufNewFile * g:diffview_test_read_hooks += 1
+    autocmd FileType python,c,sh g:diffview_test_language_hooks += 1
+  augroup END
+  SeedRegisters()
+  var registers = RegisterState()
+  var buffers = getbufinfo()->mapnew((_, b) => b.bufnr)
+  var windows = getwininfo()->mapnew((_, w) => w.winid)
+  var cwd = [getcwd(), getcwd(-1), haslocaldir()]
+  try
+    DiffviewOpen
+    Select('Unstaged', 'code.py')
+    Pair(['def indexed():', '    return 2'], ['def worktree():', '    return 3'])
+    for side in ['left', 'right']
+      assert_equal('diffview', getbufvar(Role(side).bufnr, '&filetype'))
+      assert_match('^python', SyntaxToken(side, 1, 1), 'real Python token')
+    endfor
+    Select('Unstaged', 'code.c')
+    Pair(['int amount = 1;'], ['int amount = 2;'])
+    assert_match('^c', SyntaxToken('right', 1, 1), 'real C type token')
+    Select('Staged', 'move.c')
+    Pair(['# rename comment', 'int amount = 1;', 'def renamed():', '    return 1'],
+      ['# rename comment', 'int amount = 1;', 'def renamed():', '    return 1'])
+    assert_match('^python', SyntaxToken('left', 3, 1), 'left syntax follows old .py name')
+    assert_match('^c', SyntaxToken('right', 2, 1), 'right syntax follows new .c name')
+    Select('Unstaged', 'script')
+    assert_match('^python', SyntaxToken('right', 2, 1), 'native shebang detection uses snapshot content')
+    Select('Unstaged', 'model.py')
+    assert_equal(8, getbufvar(Role('right').bufnr, '&tabstop'), 'snapshot modeline is not evaluated')
+    Select('Unstaged', 'noeol.py')
+    Pair(['return 0'], ['return 1'])
+    assert_false(getbufvar(Role('right').bufnr, '&endofline'), 'syntax preserves absent final newline')
+    Select('Unstaged', 'empty.py')
+    Pair(['def empty_later():', '    return 1'], [''])
+    assert_match('^python', SyntaxToken('left', 1, 1))
+    PlainSyntax('right')
+    Select('Unstaged', 'unknown.diffview_unknown')
+    PlainSyntax('left')
+    PlainSyntax('right')
+    for path in ['binary.py', 'forced.py', 'link.py']
+      Select('Unstaged', path)
+      Unavailable('\cBinary\|unsupported\|symlink')
+      PlainSyntax('left')
+      PlainSyntax('right')
+    endfor
+    DiffviewCommit reading-right
+    Select('', 'historical.py')
+    Pair(['def historical():', '    return 1'], [''])
+    assert_false(filereadable('historical.py'), 'historical logical filename is absent on disk')
+    assert_match('^python', SyntaxToken('left', 1, 1), 'deleted historical syntax')
+    PlainSyntax('right')
+    DiffviewOpen
+    Select('Unstaged', 'code.py')
+    syntax off
+    assert_false(exists('g:syntax_on'), 'control really disables global syntax')
+    DiffviewRefresh
+    PlainSyntax('left')
+    PlainSyntax('right')
+    assert_false(exists('g:syntax_on'), 'the product does not enable global syntax')
+    syntax enable
+    DiffviewRefresh
+    assert_match('^python', SyntaxToken('right', 1, 1))
+    Select('Unstaged', 'unknown.diffview_unknown')
+    var original_rtp = &runtimepath
+    var fault = test_tmp .. '/reading-syntax-fault'
+    mkdir(fault .. '/syntax', 'p')
+    writefile(['syntax match DiffviewPartial /def/', "throw 'fixture partial syntax failure'"],
+      fault .. '/syntax/python.vim')
+    try
+      &runtimepath = fault .. ',' .. &runtimepath
+      messages clear
+      Select('Unstaged', 'code.py')
+      Pair(['def indexed():', '    return 2'], ['def worktree():', '    return 3'])
+      PlainSyntax('left')
+      PlainSyntax('right')
+      assert_match('\[diffview\].*\csyntax', execute('messages'), 'syntax fault is a tagged plain fallback')
+      assert_match('fixture partial syntax failure', execute('messages'), 'fixture reached the syntax resource')
+    finally
+      &runtimepath = original_rtp
+    endtry
+    execute 'DiffviewOpen HEAD HEAD'
+    NoChanges()
+    PlainSyntax('left')
+    PlainSyntax('right')
+    assert_equal(0, g:diffview_test_read_hooks, 'syntax never opens a real similarly named file')
+    assert_equal(0, g:diffview_test_language_hooks, 'snapshot detection bypasses user language FileType hooks')
+    assert_equal(registers, RegisterState())
+    assert_equal(cwd, [getcwd(), getcwd(-1), haslocaldir()])
+    DiffviewClose
+    assert_equal(buffers, getbufinfo()->mapnew((_, b) => b.bufnr), 'owned detection buffers cleaned')
+    assert_equal(windows, getwininfo()->mapnew((_, w) => w.winid), 'owned detection windows cleaned')
+  finally
+    augroup DiffviewReadingHooks
+      autocmd!
+    augroup END
+    DiffviewClose
+  endtry
+enddef
+
+def ReadingView(): dict<any>
+  return ComparisonState()->filter((key, _) =>
+    index(['rows', 'nodes', 'bodies', 'readonly', 'options', 'sources', 'labels', 'registers'], key) >= 0)
+enddef
+
+def GotoCheck(path: string, hint: number, key: bool = true): number
+  var comparison = Role('panel')
+  var state = ReadingView()
+  var tabs = tabpagenr('$')
+  if key
+    feedkeys('gf', 'xt')
+  else
+    execute 'DiffviewGotoFile'
+  endif
+  assert_equal(tabs + 1, tabpagenr('$'), 'gf opens one ordinary tab')
+  assert_equal(comparison.tabnr + 1, tabpagenr(), 'user tab is adjacent to the comparison')
+  assert_equal(resolve(path), resolve(expand('%:p')), 'gf uses the mapped raw path')
+  assert_equal(hint, line('.'), 'numeric line hint is clamped to the loaded target')
+  var target = bufnr()
+  assert_equal('', &buftype)
+  assert_true(&modifiable)
+  assert_false(&readonly)
+  assert_false(&diff, 'ordinary navigation tab does not inherit snapshot diff')
+  if path =~ '\.py$'
+    assert_equal('python', &filetype, 'normal real-file filetype detection runs')
+  elseif path =~ '\.c$'
+    assert_equal('c', &filetype, 'normal real-file filetype detection runs')
+  endif
+  assert_equal('', get(b:, 'diffview_role', ''), 'ordinary target never becomes plugin owned')
+  for lhs in ['q', 'r', 'gf']
+    assert_false(get(maparg(lhs, 'n', false, true), 'buffer', false), 'no Diffview map on user target: ' .. lhs)
+  endfor
+  tabprevious
+  assert_equal(comparison.tabnr, tabpagenr(), 'native tab navigation returns to the comparison')
+  assert_equal(state, ReadingView(), 'opening a real file leaves the selected comparison unchanged')
+  return target
+enddef
+
+def ReadingGoto()
+  execute 'cd ' .. fnameescape(test_tmp .. '/reading repo')
+  var repo = getcwd()
+  filetype on
+  edit code.py
+  setline(1, ['UNSAVED navigation caller'])
+  deletebufline(bufnr(), 2, '$')
+  var caller = bufnr()
+  var origin = win_getid()
+  vsplit nav/target.py
+  setline(1, ['UNSAVED target one', 'UNSAVED target two', 'UNSAVED target three', 'UNSAVED target four'])
+  var target = bufnr()
+  var targetwin = win_getid()
+  set nohidden autowrite autowriteall
+  win_gotoid(origin)
+  var caller_options = WindowOptions(origin)
+  var target_options = WindowOptions(targetwin)
+  var cwd = [getcwd(), getcwd(-1), haslocaldir()]
+  SeedRegisters()
+  var registers = RegisterState()
+  DiffviewOpen
+  Select('Unstaged', 'nav/target.py')
+  Pair(['HEAD one', 'HEAD two', 'HEAD three', 'HEAD four', 'HEAD five', 'HEAD six'],
+    ['CURRENT first', 'CURRENT second'])
+  win_gotoid(Role('left').winid)
+  cursor(6, 1)
+  assert_equal(target, GotoCheck(repo .. '/nav/target.py', 4), 'reuse the already loaded dirty target')
+  assert_equal(['UNSAVED target one', 'UNSAVED target two', 'UNSAVED target three', 'UNSAVED target four'],
+    getbufline(target, 1, '$'))
+  assert_true(getbufvar(target, '&modified'))
+  win_gotoid(Role('right').winid)
+  cursor(2, 1)
+  assert_equal(target, GotoCheck(repo .. '/nav/target.py', 2))
+  Select('Staged', 'new dir/same.c')
+  win_gotoid(Role('left').winid)
+  var oldbuf = GotoCheck(repo .. '/old dir/same.py', 1)
+  assert_equal(['OLDPATH current'], getbufline(oldbuf, 1, '$'), 'left uses oldpath, not the rename destination')
+  win_gotoid(Role('right').winid)
+  var newbuf = GotoCheck(repo .. '/new dir/same.c', 1)
+  TreeCursor(Node('Staged', 'new dir/same.c'))
+  assert_equal(newbuf, GotoCheck(repo .. '/new dir/same.c', 1), 'panel gf uses destination')
+  win_gotoid(origin)
+  assert_equal(newbuf, GotoCheck(repo .. '/new dir/same.c', 1, false), 'command from another window uses selection')
+
+  for node in [Node('Unstaged', 'src/keep.py').parent]
+    TreeCursor(node)
+    var state = ComparisonState()
+    Reject('DiffviewGotoFile')
+    assert_equal(state, ComparisonState(), 'directory is not a file-navigation target')
+  endfor
+  win_gotoid(Panel())
+  cursor(1, 1)
+  var state = ComparisonState()
+  Reject('DiffviewGotoFile')
+  assert_equal(state, ComparisonState(), 'header has no raw file target')
+  for path in ['gone.txt', 'nav/nonregular.py', 'link.py']
+    Select('Unstaged', path)
+    state = ComparisonState()
+    Reject('DiffviewGotoFile')
+    assert_equal(state, ComparisonState(), 'missing/nonregular/symlink navigation preserves view: ' .. path)
+  endfor
+  Select('Unstaged', 'nav/target.py')
+  for replacement in [{path: 'nav', external: 'reading-outside'},
+      {path: 'nav/target.py', external: 'reading-outside/target.py'}, {path: 'nav/target.py', external: ''}]
+    var mapped = repo .. '/' .. replacement.path
+    var saved = test_tmp .. '/reading-goto.saved'
+    try
+      assert_equal(0, rename(mapped, saved))
+      if replacement.external != ''
+        system('ln -s ' .. shellescape(test_tmp .. '/' .. replacement.external) .. ' ' .. shellescape(mapped))
+        assert_equal('link', getftype(mapped), 'use-time symlink replacement is real')
+      else
+        assert_equal('', getftype(mapped), 'use-time missing target is real')
+      endif
+      state = ComparisonState()
+      Reject('DiffviewGotoFile')
+      assert_equal(state, ComparisonState(), 'use-time safe-path check precedes dirty-buffer reuse')
+      assert_equal(-1, bufnr(test_tmp .. '/reading-outside/target.py'), 'outside fixture is not opened')
+    finally
+      if getftype(mapped) == 'link'
+        delete(mapped)
+      endif
+      if getftype(saved) != ''
+        assert_equal(0, rename(saved, mapped))
+      endif
+    endtry
+  endfor
+  Select('Unstaged', 'code.c')
+  g:diffview_test_goto_ft_faults = 0
+  augroup DiffviewGotoFailure
+    autocmd FileType c g:diffview_test_goto_ft_faults += 1 | throw 'fixture real-file FileType failure'
+  augroup END
+  try
+    win_gotoid(Role('right').winid)
+    state = ComparisonState()
+    Reject('DiffviewGotoFile')
+    assert_equal(1, g:diffview_test_goto_ft_faults, 'failure happens in the actual real-file open')
+    assert_equal(state, ComparisonState(), 'open FileType fault rolls back only new user resources')
+  finally
+    augroup DiffviewGotoFailure
+      autocmd!
+    augroup END
+  endtry
+  execute 'cd ' .. fnameescape(test_tmp .. '/special')
+  DiffviewOpen
+  for path in ['space 中文.txt', '-leading.txt', "semi;$(touch INJECTED)|quote'\".txt",
+      "line\nname.txt", "ctrl\x01name.txt", 'literal\n.txt', ':(glob)**']
+    Select('Unstaged', path)
+    win_gotoid(Role('right').winid)
+    GotoCheck(test_tmp .. '/special/' .. path, 1)
+  endfor
+  assert_false(filereadable('INJECTED'), 'gf never executes raw shell/Ex filename punctuation')
+  execute 'cd ' .. fnameescape(repo)
+  execute 'DiffviewOpen reading-left:one\ part reading-right:two\ part'
+  Select('', 'common.py')
+  Pair(['LEFT subtree'], ['RIGHT subtree'])
+  var calls = PickerGitCalls()
+  var tag = repo .. '/.git/refs/tags/reading-left'
+  try
+    assert_equal(0, rename(tag, test_tmp .. '/reading-left.saved'))
+    win_gotoid(Role('left').winid)
+    GotoCheck(repo .. '/one part/common.py', 1)
+    win_gotoid(Role('right').winid)
+    GotoCheck(repo .. '/two part/common.py', 1)
+    assert_equal(calls, PickerGitCalls(), 'gf uses captured subtree mapping without resolving a ref again')
+  finally
+    assert_equal(0, rename(test_tmp .. '/reading-left.saved', tag))
+  endtry
+  execute 'DiffviewOpen reading-left:colon:dir reading-right:colon:dir'
+  Select('', 'common.py')
+  Pair(['LEFT colon subtree'], ['RIGHT colon subtree'])
+  win_gotoid(Role('right').winid)
+  GotoCheck(repo .. '/colon:dir/common.py', 1)
+  execute 'DiffviewOpen reading-clock@{2020-06-01T00:00:00Z}:one\ part reading-right:two\ part'
+  Select('', 'common.py')
+  Pair(['LEFT subtree'], ['RIGHT subtree'])
+  win_gotoid(Role('left').winid)
+  state = ComparisonState()
+  var previous_tabs = tabpagenr('$')
+  messages clear
+  v:errmsg = ''
+  var mapping_error = ''
+  try
+    execute 'DiffviewGotoFile'
+  catch
+    mapping_error = v:exception
+  endtry
+  if tabpagenr('$') == previous_tabs
+    var notice = mapping_error .. execute('messages') .. v:errmsg
+    assert_match('\[diffview\]', notice)
+    assert_match('\cunsupported\|mapping\|unknown', notice, 'refusal explains the unproven worktree mapping')
+    assert_equal(state, ComparisonState(), 'ambiguous mapping must explicitly refuse, not guess')
+  else
+    assert_equal(previous_tabs + 1, tabpagenr('$'))
+    assert_equal(resolve(repo .. '/one part/common.py'), resolve(expand('%:p')),
+      'colon inside reflog is not mistaken for the subtree separator')
+    tabprevious
+  endif
+  execute 'DiffviewOpen ' .. Ref('reading-left-tree') .. ' ' .. Ref('reading-right-tree')
+  Select('', 'one part/common.py')
+  state = ComparisonState()
+  Reject('DiffviewGotoFile')
+  assert_equal(state, ComparisonState(), 'raw tree ID cannot guess a matching current file')
+  assert_equal(cwd, [getcwd(), getcwd(-1), haslocaldir()])
+  assert_equal(registers, RegisterState())
+  assert_equal(caller_options, WindowOptions(origin))
+  assert_equal(target_options, WindowOptions(targetwin))
+  assert_equal([false, true, true], [&hidden, &autowrite, &autowriteall])
+  assert_equal(['UNSAVED navigation caller'], getbufline(caller, 1, '$'))
+  assert_true(getbufvar(caller, '&modified'))
+  assert_true(getbufvar(target, '&modified'))
+  win_gotoid(getwininfo()->filter((_, w) => w.bufnr == newbuf)[0].winid)
+  execute 'DiffviewClose'
+  assert_true(bufexists(newbuf) && bufexists(oldbuf), 'Close never wipes normal navigation buffers')
+  assert_true(!empty(getwininfo()->filter((_, w) => w.bufnr == newbuf)), 'Close keeps the user navigation tab')
+  assert_equal(['CURRENT first', 'CURRENT second'], readfile(repo .. '/nav/target.py'))
+  assert_equal(['def worktree():', '    return 3'], readfile(repo .. '/code.py'))
+enddef
+
+def SetProjection(paths: list<string>)
+  # <f-args> needs space/backslash escaping, not fnameescape's literal glob/newline backslashes.
+  execute 'DiffviewFilter ' .. join(mapnew(paths, (_, path) => escape(path, " \t\\")), ' ')
+enddef
+
+def NoMetadataReload(first: number)
+  for command in PickerGitCalls()[first : ]
+    var argv = split(command, "\n", true)
+    for forbidden in ['diff', 'diff-tree', 'rev-parse', 'log']
+      assert_equal(-1, index(argv, forbidden), 'projection does not reload Git comparison/history/refs')
+    endfor
+  endfor
+enddef
+
+def EntryKeys(): list<string>
+  return Entries()->mapnew((_, node) => node.diffview_entry.section .. ':' .. node.diffview_entry.path)
+    ->sort()
+enddef
+
+def ReadingFilter()
+  execute 'cd ' .. fnameescape(test_tmp .. '/reading repo')
+  var repo = getcwd()
+  syntax enable
+  SeedRegisters()
+  var registers = RegisterState()
+  DiffviewOpen
+  var full = EntryKeys()
+  var wrapper_state = ComparisonState()
+  Reject('DiffBranch --')
+  assert_equal(wrapper_state, ComparisonState(), 'legacy wrapper still treats -- as an invalid revision')
+  Select('Unstaged', 'code.py')
+  var snapshots = [getbufline(Role('left').bufnr, 1, '$'), getbufline(Role('right').bufnr, 1, '$')]
+  var disk = readfile('code.py', 'b')
+  try
+    writefile(['DISK changed but not refreshed'], 'code.py')
+    var first = len(PickerGitCalls())
+    SetProjection(['./code.py//', 'code.c'])
+    assert_equal(['Staged:code.py', 'Unstaged:code.c', 'Unstaged:code.py'], EntryKeys())
+    assert_equal(snapshots, [getbufline(Role('left').bufnr, 1, '$'), getbufline(Role('right').bufnr, 1, '$')],
+      'visible selected entry retains its existing disk snapshot')
+    assert_equal('Unstaged', getbufvar(Role('right').bufnr, 'diffview_section'))
+    assert_equal('code.py', getbufvar(Role('right').bufnr, 'diffview_path'))
+    assert_equal(first, len(PickerGitCalls()), 'same selected projection needs no Git reads')
+    SetProjection([])
+    assert_equal(full, EntryKeys(), 'clear restores the retained full model')
+    NoMetadataReload(first)
+  finally
+    writefile(disk, 'code.py', 'b')
+  endtry
+  var first = len(PickerGitCalls())
+  SetProjection(['src'])
+  for node in Entries()
+    assert_match('^src/', node.diffview_entry.path, 'segment prefix does not include src2')
+  endfor
+  assert_equal(2, len(Entries()))
+  Select('Unstaged', 'src/deep/keep.py')
+  Pair(['HEAD deep'], ['DISK deep'])
+  var deep = Node('Unstaged', 'src/deep/keep.py').parent
+  TreeCursor(deep)
+  normal o
+  assert_false(deep.isOpen)
+  SetProjection(['src', 'code.c'])
+  assert_false(Node('Unstaged', 'src/deep/keep.py').parent.isOpen, 'surviving directory expansion is retained')
+  NoMetadataReload(first)
+  for path in ['move.py', 'move.c']
+    SetProjection([path])
+    assert_equal(['Staged:move.c'], EntryKeys(), 'rename matches either raw side exactly once')
+    assert_equal('move.py', Node('Staged', 'move.c').diffview_entry.oldpath)
+  endfor
+  for invalid in ['../code.py', 'src/../code.py', '/code.py']
+    var state = ComparisonState()
+    Reject('DiffviewFilter ' .. fnameescape(invalid))
+    assert_equal(state, ComparisonState(), 'invalid filter is transactional')
+  endfor
+  SetProjection(['NO_MATCH'])
+  assert_equal([], Entries())
+  assert_match('No matching changes', join(getbufline(Role('panel').bufnr, 1, '$'), "\n"))
+  for side in ['left', 'right']
+    assert_match('No matching changes', join(getbufline(Role(side).bufnr, 1, '$'), "\n"))
+    assert_equal('', getbufvar(Role(side).bufnr, 'diffview_source'))
+    assert_equal('', getbufvar(Role(side).bufnr, 'diffview_path'))
+    assert_false(PaneOption(side, 'diff'))
+    PlainSyntax(side)
+  endfor
+  var empty_state = ComparisonState()
+  Reject('DiffviewGotoFile')
+  assert_equal(empty_state, ComparisonState(), 'no-match view cannot navigate an old path')
+  SetProjection(['.'])
+  assert_equal(full, EntryKeys())
+  Select('Unstaged', 'code.py')
+  var state = ComparisonState()
+  try
+    assert_equal(0, rename('src/keep.py', test_tmp .. '/reading-filter.saved'))
+    Reject('DiffviewFilter src/keep.py')
+    assert_equal(state, ComparisonState(), 'filter selection read failure preserves prior filter/model/snapshots')
+  finally
+    assert_equal(0, rename(test_tmp .. '/reading-filter.saved', 'src/keep.py'))
+  endtry
+  var tree = getbufvar(Role('panel').bufnr, 'NERDTree')
+  var FileRender = get(g:NERDTreeFileNode, 'renderToString')
+  var DirRender = get(g:NERDTreeDirNode, 'renderToString')
+  var InstanceRender = get(tree.root, 'renderToString')
+  g:diffview_test_render_failures = 0
+  try
+    g:NERDTreeFileNode.renderToString = RenderFailure
+    g:NERDTreeDirNode.renderToString = RenderFailure
+    tree.root.renderToString = RenderFailure
+    Reject('DiffviewFilter code.c')
+    assert_true(g:diffview_test_render_failures > 0, 'filter reached actual native partial render')
+    assert_equal(state, ComparisonState())
+    assert_true(tree is getbufvar(Role('panel').bufnr, 'NERDTree'), 'failed filter retains old native instance')
+  finally
+    g:NERDTreeFileNode.renderToString = FileRender
+    g:NERDTreeDirNode.renderToString = DirRender
+    tree.root.renderToString = InstanceRender
+  endtry
+  execute 'DiffviewOpen -- src'
+  assert_equal(2, len(Entries()), 'Open separator applies initial literal prefix')
+  DiffviewOpen
+  assert_equal(full, EntryKeys(), 'new unfiltered Open resets projection')
+  execute 'DiffviewOpen HEAD HEAD -- missing'
+  NoChanges()
+
+  execute 'cd ' .. fnameescape(test_tmp .. '/tree repo')
+  execute 'DiffviewOpen -- weird'
+  for path in ["weird/line\nname.txt", 'weird/line^@name.txt', "weird/bell\x07name.txt",
+      'weird/bell^Gname.txt', 'weird/:(glob)**', 'weird/literal\n.txt']
+    SetProjection([path])
+    assert_equal(2, len(Entries()), 'literal raw filter distinguishes display twins')
+    for node in Entries()
+      assert_equal(path, node.diffview_entry.path, 'literal path is not parsed as glob/regex/display text')
+    endfor
+    var node = Node('Unstaged', path)
+    win_gotoid(Panel())
+    var headers = getline(1, 2)
+    g:NERDTreeRender()
+    assert_equal(headers, getline(1, 2))
+    var tree_row = b:NERDTree.ui.getLineNum(node)
+    assert_true(stridx(getline(tree_row), node.displayString()) >= 0, 'dynamic headers map to the actual screen row')
+    TreeCursor(node)
+    feedkeys("\<CR>", 'xt')
+    assert_equal(path, getbufvar(Role('right').bufnr, 'diffview_path'))
+  endfor
+  execute 'cd ' .. fnameescape(repo)
+  execute 'DiffviewOpen reading-left reading-right -- one\ part'
+  Select('', 'one part/common.py')
+  Pair(['LEFT subtree'], ['NEXT first subtree'])
+  var right_ref = repo .. '/.git/refs/tags/reading-right'
+  try
+    execute 'cd ' .. fnameescape(test_tmp .. '/nonrepo')
+    writefile([Ref('reading-left')], right_ref)
+    first = len(PickerGitCalls())
+    SetProjection([])
+    Pair(['LEFT subtree'], ['NEXT first subtree'])
+    NoMetadataReload(first)
+    SetProjection(['one part'])
+    DiffviewRefresh
+    NoChanges()
+    writefile([Ref('reading-right')], right_ref)
+    DiffviewRefresh
+    assert_equal(['Trees:one part/common.py'], EntryKeys(), 'Refresh remembers literal filters and original repository')
+  finally
+    writefile([Ref('reading-right')], right_ref)
+  endtry
+  execute 'cd ' .. fnameescape(repo)
+  execute 'DiffviewCommit reading-right -- historical.py'
+  assert_equal(['Commit:historical.py'], EntryKeys())
+  Pair(['def historical():', '    return 1'], [''])
+  $FZF_DEFAULT_OPTS = '--filter=READING_NEXT'
+  execute 'DiffviewCommit -- one\ part'
+  WaitPicker()
+  assert_equal(['Commit:one part/common.py'], EntryKeys(), 'real fzf callback retains prefixes')
+  Pair(['LEFT subtree'], ['NEXT first subtree'])
+  try
+    execute 'cd ' .. fnameescape(test_tmp .. '/nonrepo')
+    writefile([Ref('reading-left')], right_ref)
+    first = len(PickerGitCalls())
+    DiffviewRefresh
+    Pair(['LEFT subtree'], ['NEXT first subtree'])
+    PickerOidUsed(Ref('reading-right'), first)
+    assert_equal([], filter(PickerGitCalls()[first : ], (_, command) => index(split(command, "\n", true), 'log') >= 0))
+    assert_equal(['Commit:one part/common.py'], EntryKeys(), 'fzf Refresh retains original repo/fullOID/filter')
+  finally
+    writefile([Ref('reading-right')], right_ref)
+  endtry
+  assert_equal(registers, RegisterState(), 'filter/native rendering preserves all raw registers')
+  DiffviewClose
+enddef
+
+def NumstatOracle(name: string): dict<list<number>>
+  var fields: list<string> = []
+  var field = ''
+  for byte in blob2list(readblob(test_tmp .. '/reading-' .. name .. '.numstat'))
+    if byte == 0
+      add(fields, field)
+      field = ''
+    else
+      assert_true(byte < 128, 'independent count fixture uses ASCII raw paths')
+      field ..= nr2char(byte)
+    endif
+  endfor
+  assert_equal('', field, 'numstat oracle is NUL terminated')
+  var result: dict<list<number>> = {}
+  var i = 0
+  while i < len(fields)
+    var parts = split(fields[i], "\t", true)
+    assert_equal(3, len(parts), 'Git numstat record has two counts and a path')
+    if len(parts) != 3
+      throw 'Malformed fixture numstat'
+    endif
+    var counts = parts[0] == '-' && parts[1] == '-' ? [-1, -1] : [str2nr(parts[0]), str2nr(parts[1])]
+    assert_true(parts[0] == '-' || parts[0] =~ '^\d\+$')
+    assert_true(parts[1] == '-' || parts[1] =~ '^\d\+$')
+    var path = parts[2]
+    if path == ''
+      assert_true(i + 2 < len(fields), 'rename has both raw NUL path fields')
+      path = fields[i + 2]
+      i += 2
+    endif
+    result[path] = counts
+    i += 1
+  endwhile
+  return result
+enddef
+
+def StatsHeader(full: number)
+  var added = 0
+  var deleted = 0
+  var unknown = 0
+  for node in Entries()
+    var entry = node.diffview_entry
+    assert_equal(v:t_number, type(entry.added))
+    assert_equal(v:t_number, type(entry.deleted))
+    assert_true(entry.added >= -1 && entry.deleted >= -1)
+    if entry.added < 0 || entry.deleted < 0
+      assert_equal([-1, -1], [entry.added, entry.deleted], 'unknown is explicit, not zero')
+      unknown += 1
+    else
+      added += entry.added
+      deleted += entry.deleted
+    endif
+    var row = getbufvar(Role('panel').bufnr, 'NERDTree').ui.getLineNum(node)
+    var suffix = entry.added < 0 ? '+? -?' : '+' .. entry.added .. ' -' .. entry.deleted
+    assert_true(stridx(getbufline(Role('panel').bufnr, row)[0], suffix) >= 0,
+      'native leaf displays actual known/unknown counts')
+  endfor
+  var summary = getbufline(Role('panel').bufnr, 3)[0]
+  assert_match(len(Entries()) .. '/' .. full .. '\s\+entries', summary)
+  assert_true(stridx(summary, '+' .. added .. ' -' .. deleted) >= 0, 'summary sums known visible counts')
+  if unknown > 0
+    assert_match(unknown .. '\s\+unknown', summary)
+  else
+    assert_false(summary =~ 'unknown', 'known zero is not an unknown counter')
+  endif
+enddef
+
+def ReadingStats()
+  execute 'cd ' .. fnameescape(test_tmp .. '/reading repo')
+  var expected = {Staged: NumstatOracle('staged'), Unstaged: NumstatOracle('unstaged')}
+  var first = len(PickerGitCalls())
+  DiffviewOpen
+  var diffs = PickerGitCalls()[first : ]->filter((_, command) => index(split(command, "\n", true), 'diff') >= 0)
+  assert_equal(2, len(diffs), 'stats reuse the two existing local diff queries')
+  for command in diffs
+    var argv = split(command, "\n", true)
+    assert_true(index(argv, '--raw') >= 0 && index(argv, '--numstat') >= 0, 'raw and counts come from the same query')
+  endfor
+  for node in Entries()
+    var entry = node.diffview_entry
+    var counts = entry.section == 'Untracked' || entry.oldmode == '120000' || entry.newmode == '120000'
+      ? [-1, -1] : expected[entry.section][entry.path]
+    assert_equal(counts, [entry.added, entry.deleted], 'metadata matches independent Git numstat: ' .. entry.path)
+  endfor
+  for path in ['move.c', 'empty-added.py']
+    var entry = Node('Staged', path).diffview_entry
+    assert_equal([0, 0], [entry.added, entry.deleted], 'pure rename/empty add is known zero')
+  endfor
+  assert_equal([0, 0], [Node('Unstaged', 'mode.txt').diffview_entry.added, Node('Unstaged', 'mode.txt').diffview_entry.deleted])
+  var full = len(Entries())
+  StatsHeader(full)
+  var original = ComparisonState()
+  try
+    for malformed in ['oops', '-2', '-']
+      $DIFFVIEW_TEST_BAD_NUMSTAT = malformed
+      Reject('DiffviewRefresh')
+      assert_equal(original, ComparisonState(), 'malformed count is not silently accepted as zero')
+    endfor
+  finally
+    $DIFFVIEW_TEST_BAD_NUMSTAT = ''
+  endtry
+  var original_headers = getbufline(Role('panel').bufnr, 1, 2)
+  SetProjection(['code.py', 'new.py'])
+  StatsHeader(full)
+  assert_equal(3, len(Entries()), 'same-path staged and unstaged count as two entries')
+  var node = Node('Unstaged', 'code.py')
+  var filtered_headers = getbufline(Role('panel').bufnr, 1, 4)
+  assert_match('Filter:', filtered_headers[3])
+  assert_equal(original_headers, filtered_headers[0 : 1])
+  g:NERDTreeRender()
+  assert_equal(filtered_headers, getbufline(Role('panel').bufnr, 1, 4), 'public native rerender retains summary and filter')
+  var row = b:NERDTree.ui.getLineNum(node)
+  assert_true(stridx(getline(row), node.displayString()) >= 0, 'stats/filter header height drives real screen lookup')
+  TreeCursor(node)
+  feedkeys("\<CR>", 'xt')
+  Pair(['def indexed():', '    return 2'], ['def worktree():', '    return 3'])
+  SetProjection([])
+  StatsHeader(full)
+  SetProjection(['NO_MATCH'])
+  StatsHeader(full)
+  SetProjection([])
+  execute 'DiffviewOpen reading-left reading-right'
+  var history = NumstatOracle('history')
+  for entry in Entries()->mapnew((_, n) => n.diffview_entry)
+    assert_equal(history[entry.path], [entry.added, entry.deleted], 'tree stats')
+  endfor
+  StatsHeader(len(Entries()))
+  DiffviewCommit reading-right
+  for entry in Entries()->mapnew((_, n) => n.diffview_entry)
+    assert_equal(history[entry.path], [entry.added, entry.deleted], 'first-parent commit stats')
+  endfor
+  DiffviewCommit reading-left
+  var root = NumstatOracle('root')
+  for entry in Entries()->mapnew((_, n) => n.diffview_entry)
+    var counts = entry.newmode == '120000' ? [-1, -1] : root[entry.path]
+    assert_equal(counts, [entry.added, entry.deleted], 'root commit stats')
+  endfor
+  StatsHeader(len(Entries()))
+  execute 'cd ' .. fnameescape(test_tmp .. '/edges')
+  DiffviewOpen
+  for entry in Entries()->mapnew((_, n) => n.diffview_entry)
+    if entry.status == 'U' || index(['120000', '160000'], entry.oldmode) >= 0
+        || index(['120000', '160000'], entry.newmode) >= 0 || entry.section == 'Untracked'
+      assert_equal([-1, -1], [entry.added, entry.deleted], 'unsupported/untracked stats are unknown')
+    endif
+  endfor
+  DiffviewClose
+  execute 'cd ' .. fnameescape(test_tmp .. '/reading repo')
+  execute 'DiffviewOpen HEAD HEAD'
+  NoChanges()
+  StatsHeader(0)
+  DiffviewClose
+enddef
+
 try
   assert_true(has('vim9script'))
   assert_true(has('diff'))
@@ -2082,7 +2761,7 @@ try
     runtime plugin/NERD_tree.vim
     assert_equal(2, exists(':NERDTree'), 'real NERDTree commands are loaded')
   endif
-  if case_name =~ '^picker_' && case_name != 'picker_missing'
+  if (case_name =~ '^picker_' || case_name == 'reading_filter') && case_name != 'picker_missing'
     if case_name == 'picker_api'
       &runtimepath = $FZF_RUNTIME .. ',' .. &runtimepath
       runtime plugin/fzf.vim
@@ -2097,7 +2776,7 @@ try
       assert_true(has('terminal'), 'filtered core integration uses a real Vim terminal job')
     endif
   endif
-  if case_name =~ '^picker_'
+  if case_name =~ '^picker_' || case_name == 'reading_filter'
     g:fzf_layout = {down: 8}
   endif
   runtime plugin/main.vim
@@ -2177,6 +2856,14 @@ try
     PickerErrors()
   elseif case_name == 'picker_api'
     PickerApi()
+  elseif case_name == 'reading_syntax'
+    ReadingSyntax()
+  elseif case_name == 'reading_goto'
+    ReadingGoto()
+  elseif case_name == 'reading_filter'
+    ReadingFilter()
+  elseif case_name == 'reading_stats'
+    ReadingStats()
   else
     throw 'Unknown test case: ' .. case_name
   endif

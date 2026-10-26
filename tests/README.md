@@ -121,6 +121,10 @@ Additional scenarios:
 | picker_old_binary | Unmodified real core with an incompatible version-reporting binary fixture rejects without consuming input or running an installer/picker; explicit HEAD remains usable |
 | picker_errors | Unborn, non-Git, bare and injected Git history failure report errors without replacing the old view |
 | picker_api | Public fzf callback boundary only: original repository/full OID after cwd/ref changes; malformed, duplicate and forged rows, launch/read/render errors and immutable refresh |
+| reading_syntax | Actual built-in Python/C/shebang tokens, per-side rename and deleted names, syntax-off/unknown/empty/nontext clearing, raw EOL, modeline/FileType isolation and partial syntax error fallback |
+| reading_goto | Public gf/command opens adjacent normal tabs, clamps line hints, reuses dirty targets without saving, preserves caller/options/registers, maps rename/subtree sides, rejects unknown tree/missing/nonregular/symlink targets and rolls back a real FileType failure |
+| reading_filter | Initial Open/Commit/fzf prefixes, local duplicate groups, rename old/new identity, segment/OR/normalization, literal control/display twins, retained selected snapshots, no diff/ref/history reload, no-match/clear/Refresh and read/native-render failure rollback |
+| reading_stats | Independent Git numstat oracle for local/tree/ordinary/root commit metadata; known zeros versus unsupported/binary/untracked unknowns, leaf/header totals and dynamic native rows; malformed-count boundary rejection |
 
 Picker fixtures include six HEAD-reachable commits, a merged side branch and an
 excluded branch, Unicode/control/shell punctuation metadata, SHA-1/SHA-256 and
@@ -174,3 +178,11 @@ repository. Compilation and fixture controls alone do not establish product PASS
 run the complete suite and terminal checklist against the exact candidate.
 Other versions/platforms/geometries and larger workloads require their own checks.
 Headless success alone does not establish interactive usability.
+
+The reading fixture adds two whole-directory comparisons (repository and the
+disposable outside-symlink target) to the original 23. Its numstat oracle is
+captured directly from Git before product execution. A narrow existing Git
+wrapper boundary supplies malformed numeric output only for the rejection
+checks; it does not replace the real count, syntax, tree or fzf integrations.
+The four reading groups are prepared tests, not evidence of product PASS until
+the complete candidate-owned runner and same-candidate terminal checks execute.

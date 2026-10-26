@@ -35,6 +35,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY
 unset GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
 unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS
 unset FZF_DEFAULT_OPTS FZF_DEFAULT_OPTS_FILE FZF_DEFAULT_COMMAND
+unset DIFFVIEW_TEST_BAD_NUMSTAT
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_OPTIONAL_LOCKS=0
 export GIT_ATTR_NOSYSTEM=1
 export GIT_AUTHOR_NAME=Tester GIT_AUTHOR_EMAIL=tester@example.invalid
@@ -143,6 +144,7 @@ printf 'OUTSIDE fixture marker\n' > "$test_tmp/outside/forced.dat"
 . "$root/tests/fixtures-c02.sh"
 . "$root/tests/fixtures-nerdtree.sh"
 . "$root/tests/fixtures-picker.sh"
+. "$root/tests/fixtures-reading.sh"
 
 # Compare all fixture bytes, including indexes/objects, after Vim exits.
 cp -R "$test_tmp/local repo 中文" "$test_tmp/local-before"
@@ -210,6 +212,14 @@ cat > "$test_tmp/git-bin/git" <<'EOF'
 #!/bin/sh
 printf '%s\000' "$@" >> "$DIFFVIEW_TEST_GIT_LOG"
 printf '\n' >> "$DIFFVIEW_TEST_GIT_LOG"
+if [ -n "${DIFFVIEW_TEST_BAD_NUMSTAT:-}" ]; then
+    for argument do
+        if [ "$argument" = diff ] || [ "$argument" = diff-tree ]; then
+            printf '%s\t1\tcode.py\000' "$DIFFVIEW_TEST_BAD_NUMSTAT"
+            exit 0
+        fi
+    done
+fi
 if [ "${DIFFVIEW_TEST_FAIL_LOG:-0}" = 1 ]; then
     for argument do
         if [ "$argument" = log ]; then
@@ -226,7 +236,8 @@ suite_failed=0
 test_cases='local clean unborn nonrepo special refresh lifecycle ownership ancestor
     trees commits historical_refresh errors exclusions edges cross_tab read_failure navigation
     binary_clean binary_mixed large empty_start tree_nodes tree_history tree_isolation dependency tree_rollback
-    picker_real picker_no_match picker_enew picker_async picker_sha256 picker_missing picker_old_binary picker_errors picker_api'
+    picker_real picker_no_match picker_enew picker_async picker_sha256 picker_missing picker_old_binary picker_errors picker_api
+    reading_syntax reading_goto reading_filter reading_stats'
 if [ -n "${NERDTREE_GIT_RUNTIME:-}" ]; then
     test_cases="$test_cases tree_git"
 else
@@ -258,6 +269,8 @@ for test_case in $test_cases; do
         suite_failed=1
     fi
 done
+diff -r "$test_tmp/reading-before" "$test_tmp/reading repo"
+diff -r "$test_tmp/reading-outside-before" "$test_tmp/reading-outside"
 
 diff -r "$test_tmp/local-before" "$test_tmp/local repo 中文"
 diff -r "$test_tmp/clean-before" "$test_tmp/clean"

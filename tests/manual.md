@@ -101,3 +101,22 @@ prompt observations outside the repository. Compare every original repository
 file, index, object and ref after restoring only declared fixture mutations.
 Report missing terminal coverage explicitly rather than inferring it from the
 filtered cases or the callback-injection fixture.
+
+For reading/navigation acceptance, enable the user's normal syntax setting and
+prepare tracked Python/C files, a cross-extension rename, a deleted historical
+file, a known subtree pair and disk/loaded/unsaved contents that differ. Retain
+the complete before-image and record the same frozen candidate for these steps:
+
+| Reading step | Expected |
+| --- | --- |
+| Select Python/C and each side of the cross-extension rename; inspect visible tokens, then disable syntax and refresh | Native syntax follows each logical name/content while filetype remains diffview; syntax-off stays plain and snapshots remain readonly |
+| Move from a known language to unknown, empty, binary or no-match content | No old language tokens or source/path labels remain on explanation/empty panes |
+| From left/right panes move to a known line and press gf; from a tree leaf and an unrelated window use gf/DiffviewGotoFile | One adjacent ordinary tab opens the correct oldpath/destination with a clamped numeric hint; normal filetype behavior and native tab return work |
+| Keep both caller and an already-loaded target dirty under nohidden/autowrite/autowriteall, then navigate and close Diffview | Reuse target edits without reload or saves; caller/options/registers remain and the user tab/buffer survives Close |
+| Open with -- prefixes, change DiffviewFilter, clear it, filter a rename's old/new name and literal special paths | Segment-aware OR matching retains raw identities, duplicate staged/unstaged entries and the existing selected snapshot; counts/flags/header rows follow the visible projection |
+| Filter to no match, clear, refresh after cwd changes and invoke native NERDTreeRender | No matching changes differs from No changes; source/syntax clear and recover correctly; the visible screen row selects the exact raw node |
+| Use gf/filter/clear/return/r/q, then run the commit picker in both default popup and enew layouts | Tree and pane keys remain usable; picker search/Enter/Esc/Ctrl-C retains prefixes/full OID/root/dirty state and leaves no extra UI or Enter prompt |
+
+Record actual syntax colors/tokens, paths, line numbers, summary/leaf counts,
+focus, return/close behavior and complete fixture comparisons. Headless token
+assertions and callback boundaries do not substitute for this terminal evidence.
