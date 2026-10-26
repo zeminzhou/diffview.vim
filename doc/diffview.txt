@@ -95,7 +95,8 @@ and NERDTREE_RUNTIME setup for developer checks.
     Accept exactly one revision before an optional -- path separator. Labels identify the
     revision and resolved short commit IDs; entries are grouped under Commit.
     Refresh resolves an explicit named revision again, while picked IDs remain
-    immutable. Other Diffview commands do not depend on fzf.
+    immutable. Explicit Commit and direct Branch comparisons do not require fzf;
+    both no-argument searches require it.
 
                                                        *:DiffviewBranch*
 :DiffviewBranch [branch] [-- paths...]
