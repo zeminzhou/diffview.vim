@@ -31,7 +31,7 @@ mode and identify the source on each side.
 | Vim | Vim 9.1 with `+vim9script`, `+diff`, `+windows`, `+job` and `+timers` |
 | Git | Available as `git` on Vim's `PATH` |
 | NERDTree | [preservim/nerdtree](https://github.com/preservim/nerdtree), formerly `scrooloose/nerdtree`, installed and loaded |
-| fzf (optional) | Core `junegunn/fzf` integration and PATH binary, only for commit search |
+| fzf (optional) | Core `junegunn/fzf` integration and PATH binary, for commit/branch search |
 
 Verified with Vim **9.1.1950**, Git **2.54.0**, and NERDTree revision
 [`690d061`](https://github.com/preservim/nerdtree/commit/690d061b591525890f1471c6675bcb5bdc8cdff9)
@@ -121,6 +121,7 @@ Diffview does not save, reload or discard your user buffers.
 | `:DiffviewOpen {left} {right}` | The specified left tree → right tree |
 | `:DiffviewCommit` | Search HEAD history with fzf, then first parent → selected commit |
 | `:DiffviewCommit {revision}` | First parent → specified commit; no fzf required |
+| `:DiffviewBranch [branch]` | Target branch → captured committed HEAD; search local/remote refs with fzf when omitted |
 | `:DiffviewRefresh` | Re-read the original repository and comparison request |
 | `:DiffviewFilter [paths...]` | Project changed entries onto literal path prefixes; no arguments clears |
 | `:DiffviewGotoFile` / `gf` | Open the current side's real worktree file in a new ordinary tab |
@@ -217,6 +218,37 @@ for display and never used as commands.
 History loading runs synchronously before fzf appears, so large histories can
 pause Vim. Unique commits on other branches, reflogs and file-specific history
 are outside this search.
+
+### Compare or search branches
+
+```vim
+:DiffviewBranch main
+:DiffviewBranch origin/main -- src tests
+:DiffviewBranch refs/remotes/origin/main
+:DiffviewBranch
+:DiffviewBranch -- src
+```
+
+An explicit branch opens directly without fzf. With no branch argument, search
+locally available local and remote-tracking refs using the same optional core
+fzf integration. Rows distinguish LOCAL and REMOTE and show a short object ID.
+Type a branch name, Enter to select, or Esc / Ctrl-C to cancel. Symbolic aliases
+such as `origin/HEAD` are excluded. No remote is fetched or contacted.
+
+The left side is the target branch and the right side the invoking checkout's
+committed HEAD. Both tips and their names are captured when invoked, so Refresh
+keeps that exact comparison even if refs, checkout or cwd change. Invoke
+`DiffviewBranch` again to compare newer tips. Detached HEAD is supported;
+unborn HEAD reports an error. This is a direct tree comparison, with no merge
+base, staged changes, disk edits or unsaved buffer content.
+
+An exact local short name wins over a remote-tracking name. For example, a
+local branch literally named `origin/main` wins that spelling; use
+`refs/remotes/origin/main` to disambiguate. Full refs under `refs/heads/` and
+`refs/remotes/` are accepted. Tags and revision expressions are rejected; use
+`DiffviewOpen target HEAD` for general named revisions and dynamic Refresh.
+The optional `--` prefixes, syntax, statistics, gf and failure/data protections
+are shared with the other comparison commands.
 
 ### Syntax, filtering and worktree navigation
 
@@ -363,17 +395,11 @@ NERDTree or Vim windows for editing files.
 
 ## Migrating from the older version
 
-The old entry points remain available:
-
-| Entry | Current behavior |
-| --- | --- |
-| `:call ToggleDiffView()` | Open local mode, or close any active Diffview view |
-| `:DiffBranch main` | Compare the committed `main` tree → `HEAD` tree |
-| `:call DiffBranch('main')` | The same branch → `HEAD` comparison |
-
-`DiffBranch` previously compared a ref with the working directory. It now
-compares committed trees; use `:DiffviewOpen` for local changes. The old flat
-file list has been replaced by the required NERDTree sidebar.
+`:call ToggleDiffView()` still opens local mode or closes an active view.
+The old `:DiffBranch` command and `g:DiffBranch()` function have been removed;
+migrate to `:DiffviewBranch`. Use `:DiffviewOpen target HEAD` when named refs
+should be resolved again on Refresh. The old flat file list has been replaced
+by the required NERDTree sidebar.
 
 Command syntax is not interchangeable with Diffview.nvim or CodeDiff. In this
 plugin, use `DiffviewOpen A B` for two trees and `DiffviewCommit rev` for a

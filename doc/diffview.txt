@@ -97,6 +97,42 @@ and NERDTREE_RUNTIME setup for developer checks.
     Refresh resolves an explicit named revision again, while picked IDs remain
     immutable. Other Diffview commands do not depend on fzf.
 
+                                                       *:DiffviewBranch*
+:DiffviewBranch [branch] [-- paths...]
+    Compare the target branch's committed tree on the left with the invoking
+    checkout's committed HEAD on the right. No implicit merge base or local
+    staged/disk/unsaved contents. The same branch gives No changes.
+
+    With one branch argument, open directly without fzf. With no argument,
+    use the optional core fzf integration to search local refs and locally
+    stored remote-tracking refs. Rows identify LOCAL/REMOTE, name and short ID.
+    Type to search; Enter selects one row, Esc/Ctrl-C cancels. Symbolic aliases
+    such as origin/HEAD are excluded. No fetch or network access is performed.
+
+    Exact local short names win over remote-tracking names. A local branch
+    named origin/main wins that spelling; refs/remotes/origin/main selects
+    the remote-tracking ref explicitly. Accept exact refs/heads/ and
+    refs/remotes/ names; reject tags, arbitrary revisions, unknown names and
+    leading options. More than one argument before -- is a usage error. >
+        DiffviewBranch main
+        DiffviewBranch refs/remotes/origin/main -- src
+        DiffviewBranch
+        DiffviewBranch -- src tests
+<
+    Capture the original repository, both complete commit IDs and source names
+    before the picker runs (or at direct invocation). Refresh rereads the same
+    two commits and retains names/prefixes, even after refs, HEAD or cwd move;
+    it never reopens fzf. Invoke again for newer tips. Detached HEAD is supported
+    and labeled; an unborn HEAD fails without replacing the old view.
+
+    Filtering, syntax, statistics and gf use the existing comparison engine.
+    No match/cancel/invalid output or Git/read/render errors preserve old views
+    and dirty buffers. The shared picker retains Commit's dependency checks,
+    single-row validation, initial/latest cwd scopes and owned-job cleanup.
+
+    The former :DiffBranch and g:DiffBranch() APIs are removed. Migrate to
+    DiffviewBranch; use DiffviewOpen target HEAD for named-ref dynamic Refresh.
+
                                                        *:DiffviewFilter*
 :DiffviewFilter [paths...]
     Project the active full comparison onto repository-relative literal path
@@ -210,15 +246,6 @@ and NERDTREE_RUNTIME setup for developer checks.
 :call ToggleDiffView()
     Open the local browser, or close any active plugin view.
     g:ToggleDiffView() is the same global function.
-
-                                                       *:DiffBranch*
-                                                       *DiffBranch()*
-:DiffBranch {branch}
-:call DiffBranch('branch')
-    Compatibility wrappers for DiffviewOpen {branch} HEAD. g:DiffBranch() is
-    the same global function. This intentionally changes the old behavior
-    from ref-to-working-tree to committed-tree comparison. Use DiffviewOpen
-    without arguments to review local staged/unstaged/untracked changes.
 
     Upstream argument conventions are not interchangeable: Diffview.nvim and
     CodeDiff commonly compare one revision with the working tree. Here use

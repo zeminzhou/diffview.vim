@@ -31,6 +31,8 @@ def vim(repo, script, directory):
                       + " . ',' . &rtp\nlet g:NERDTreeHijackNetrw = 0\n"
                       "runtime plugin/NERD_tree.vim\nruntime plugin/main.vim\n"
                       + r'''
+call assert_equal(0, exists(':DiffBranch'))
+call assert_false(exists('*g:DiffBranch'))
 function! DiffviewNodes(node)
   let nodes = [a:node]
   for child in get(a:node, 'children', [])
@@ -575,7 +577,7 @@ for command in invalid
   call Check('file.txt', ['root'], ['second'])
 endfor
 let g:diffview_injected = 0
-call g:DiffBranch("bad'|let g:diffview_injected=1")
+execute 'DiffviewBranch ' . fnameescape("bad'|let g:diffview_injected=1")
 call assert_equal(0, g:diffview_injected)
 call assert_equal(original_buffers, [Role('panel'), Role('left'), Role('right')])
 call MoveRight(root_oid)
@@ -609,13 +611,13 @@ call Check('file.txt', [''], ['root'])
 DiffviewCommit HEAD
 call assert_equal(1, len(DiffviewEntries()))
 call Check('side file', [''], ['side'])
-DiffBranch left
+DiffviewOpen left HEAD
 call Check('file.txt', ['root'], ['main'])
 call ToggleDiffView()
 call assert_equal(1, tabpagenr('$'))
-call g:DiffBranch('left')
+DiffviewOpen left HEAD
 call Check('file.txt', ['root'], ['main'])
-execute 'DiffBranch ' . weird_ref
+execute 'DiffviewOpen ' . weird_ref . ' HEAD'
 call Check('file.txt', ['root'], ['main'])
 call assert_false(filereadable('INJECTED'))
 DiffviewOpen left:tree\ dir right:tree\ dir
@@ -747,8 +749,8 @@ DiffviewFilter ../escape
 call assert_true(b:NERDTree is previous_tree)
 call assert_equal(previous_body, getbufline(right, 1, '$'))
 call assert_match('traversal', execute('messages'))
-DiffBranch --
-call assert_true(b:NERDTree is previous_tree, 'legacy wrapper keeps revision validation')
+DiffviewOpen HEAD -- src
+call assert_true(b:NERDTree is previous_tree, 'one revision remains invalid with the Open separator')
 function! ReadingRenderFailure() dict
   throw 'reading renderer failure'
 endfunction
@@ -905,6 +907,107 @@ DiffviewClose
                          for p in literal.rglob("*") if p.is_file()}
         assert before_literal == after_literal, "Literal browsing/filter/gf preserve every byte and mode"
         print("PASS: POSIX drive-shaped raw filename Open/filter/gf, absolute/traversal rejection, bytes and modes")
+
+    branch_fixtures = []
+    for object_format in ["sha1", "sha256"]:
+        branch_repo = directory / ("branches " + object_format)
+        branch_repo.mkdir()
+        git(branch_repo, "init", "-q", "-b", "main", "--object-format=" + object_format)
+        git(branch_repo, "config", "user.name", "Diffview Test")
+        git(branch_repo, "config", "user.email", "diffview@example.invalid")
+        (branch_repo / "src").mkdir()
+        for path in ["file", "src/file"]:
+            (branch_repo / path).write_text("BASE\n")
+        git(branch_repo, "add", ".")
+        git(branch_repo, "commit", "-qm", "branch root")
+        base_oid = git(branch_repo, "rev-parse", "HEAD").decode().strip()
+        git(branch_repo, "checkout", "-qb", "pick-target")
+        for path in ["file", "src/file"]:
+            (branch_repo / path).write_text("TARGET\n")
+        git(branch_repo, "commit", "-qam", "target")
+        target_oid = git(branch_repo, "rev-parse", "HEAD").decode().strip()
+        git(branch_repo, "checkout", "-q", "main")
+        for path in ["file", "src/file"]:
+            (branch_repo / path).write_text("HEAD\n")
+        git(branch_repo, "commit", "-qam", "current")
+        head_oid = git(branch_repo, "rev-parse", "HEAD").decode().strip()
+        git(branch_repo, "branch", "origin/pick-target", base_oid)
+        git(branch_repo, "update-ref", "refs/remotes/origin/pick-target", target_oid)
+        git(branch_repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/pick-target")
+        git(branch_repo, "tag", "tag-only", target_oid)
+        special_branch = "literal'$();|branch"
+        git(branch_repo, "branch", special_branch, target_oid)
+        (branch_repo / "file").write_text("INDEX\n")
+        git(branch_repo, "add", "file")
+        (branch_repo / "file").write_text("DISK\n")
+        branch_fixtures.append((branch_repo, base_oid, target_oid, head_oid))
+        before_branches = {str(p.relative_to(branch_repo)): (p.stat().st_mode, p.read_bytes())
+                           for p in branch_repo.rglob("*") if p.is_file()}
+        vim(branch_repo, "let base_oid = " + quote(base_oid)
+            + "\nlet target_oid = " + quote(target_oid)
+            + "\nlet head_oid = " + quote(head_oid)
+            + "\nlet special_branch = " + quote(special_branch) + "\n" + r'''
+function! BranchRole(role)
+  return filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, 'diffview_role', '') == a:role})[0].bufnr
+endfunction
+function! BranchPair(left, right)
+  call assert_equal([a:left], getbufline(BranchRole('left'), 1, '$'))
+  call assert_equal([a:right], getbufline(BranchRole('right'), 1, '$'))
+endfunction
+call assert_false(exists('*fzf#run'), 'direct branch comparison needs no fzf')
+edit file
+call setline(1, 'UNSAVED branch caller')
+let userbuf = bufnr()
+set nohidden autowrite autowriteall
+DiffviewBranch pick-target -- src
+call BranchPair('TARGET', 'HEAD')
+call assert_equal(1, len(DiffviewEntries()))
+call assert_match('LOCAL pick-target.*' . target_oid[0:6], getbufvar(BranchRole('left'), 'diffview_source'))
+call assert_match('HEAD main.*' . head_oid[0:6], getbufvar(BranchRole('right'), 'diffview_source'))
+let labels = [getbufvar(BranchRole('left'), 'diffview_source'), getbufvar(BranchRole('right'), 'diffview_source')]
+let saved_head = readfile('.git/HEAD', 'b')
+let saved_target = readfile('.git/refs/heads/pick-target', 'b')
+try
+  call writefile([base_oid], '.git/HEAD')
+  call writefile([head_oid], '.git/refs/heads/pick-target')
+  DiffviewRefresh
+  call BranchPair('TARGET', 'HEAD')
+  call assert_equal(labels, [getbufvar(BranchRole('left'), 'diffview_source'), getbufvar(BranchRole('right'), 'diffview_source')])
+  call assert_equal(['Filter: src'], getbufline(BranchRole('panel'), 4))
+  DiffviewBranch refs/remotes/origin/pick-target -- src
+  call BranchPair('TARGET', 'BASE')
+  call assert_match('detached HEAD.*' . base_oid[0:6], getbufvar(BranchRole('right'), 'diffview_source'))
+finally
+  call writefile(saved_head, '.git/HEAD', 'b')
+  call writefile(saved_target, '.git/refs/heads/pick-target', 'b')
+endtry
+DiffviewBranch origin/pick-target -- src
+call BranchPair('BASE', 'HEAD')
+call assert_match('LOCAL origin/pick-target', getbufvar(BranchRole('left'), 'diffview_source'))
+DiffviewBranch refs/remotes/origin/pick-target -- src
+call BranchPair('TARGET', 'HEAD')
+call assert_match('REMOTE origin/pick-target', getbufvar(BranchRole('left'), 'diffview_source'))
+execute 'DiffviewBranch ' . special_branch . ' -- src'
+call BranchPair('TARGET', 'HEAD')
+call assert_false(filereadable('INJECTED'))
+let buffers = map(['panel', 'left', 'right'], {_, role -> BranchRole(role)})
+for command in ['DiffviewBranch missing', 'DiffviewBranch tag-only', 'DiffviewBranch HEAD~1',
+    \ 'DiffviewBranch --help', 'DiffviewBranch pick-target extra', 'DiffviewBranch main -- ../escape',
+    \ 'DiffviewBranch refs/remotes/origin/HEAD']
+  execute command
+  call assert_equal(buffers, map(['panel', 'left', 'right'], {_, role -> BranchRole(role)}))
+  call BranchPair('TARGET', 'HEAD')
+endfor
+call assert_equal(['UNSAVED branch caller'], getbufline(userbuf, 1, '$'))
+call assert_true(getbufvar(userbuf, '&modified'))
+DiffviewBranch main
+call assert_equal(['No changes'], getbufline(BranchRole('right'), 1, '$'))
+DiffviewClose
+''', directory)
+        after_branches = {str(p.relative_to(branch_repo)): (p.stat().st_mode, p.read_bytes())
+                          for p in branch_repo.rglob("*") if p.is_file()}
+        assert before_branches == after_branches, "Direct branch comparisons preserve all bytes and modes"
+    print("PASS: direct local/remote collision/full refs, SHA1/SHA256, detached/fixed tips/labels/filter, invalid/tag rejection and dirty safety")
 
     fzf_runtime = os.environ.get("FZF_RUNTIME")
     if fzf_runtime:
@@ -1149,7 +1252,167 @@ call assert_true(getbufvar(userbuf, '&modified'))
                         for p in picker.rglob("*") if p.is_file()}
         assert before_picker == after_picker, "Commit search must preserve every fixture byte"
         print("PASS: real fzf filtered normal/root/merge, hostile display/defaults, short hash, no match; callback repo/OID binding, malformed output and refresh; dirty buffers and bytes")
+        for branch_repo, base_oid, target_oid, head_oid in branch_fixtures:
+            before_branch_picker = {str(p.relative_to(branch_repo)): (p.stat().st_mode, p.read_bytes())
+                                    for p in branch_repo.rglob("*") if p.is_file()}
+            vim(branch_repo, "let fzf_runtime = " + quote(fzf_runtime)
+                + "\nlet other_repo = " + quote(repo)
+                + "\nlet branch_repo = " + quote(branch_repo)
+                + "\nlet base_oid = " + quote(base_oid)
+                + "\nlet target_oid = " + quote(target_oid)
+                + "\nlet head_oid = " + quote(head_oid)
+                + "\nlet full_checks = " + str(int(len(head_oid) == 40)) + "\n" + r'''
+let &rtp = fzf_runtime . ',' . &rtp
+runtime plugin/fzf.vim
+let $FZF_DEFAULT_OPTS_FILE = ''
+function! BranchRole(role)
+  return filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, 'diffview_role', '') == a:role})[0].bufnr
+endfunction
+function! BranchPair()
+  call assert_equal(['TARGET'], getbufline(BranchRole('left'), 1, '$'))
+  call assert_equal(['HEAD'], getbufline(BranchRole('right'), 1, '$'))
+  call assert_equal(1, len(DiffviewEntries()))
+  call assert_match('REMOTE origin/pick-target.*' . g:target_oid[0:6], getbufvar(BranchRole('left'), 'diffview_source'))
+  call assert_match('HEAD main.*' . g:head_oid[0:6], getbufvar(BranchRole('right'), 'diffview_source'))
+endfunction
+function! WaitBranch()
+  let started = reltime()
+  let quiet = 0
+  while reltimefloat(reltime(started)) < 5
+    sleep 10m
+    let quiet = empty(filter(job_info(), {_, j -> job_status(j) == 'run'}))
+          \ && empty(filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, '&filetype') == 'fzf'})) ? quiet + 1 : 0
+    if quiet >= 2 | return | endif
+  endwhile
+  call assert_report('branch picker did not become quiet')
+endfunction
+function! BranchReady(buffer, query)
+  let started = reltime()
+  let stable = 0
+  while stable < 2 && reltimefloat(reltime(started)) < 5
+    call term_wait(a:buffer, 20)
+    let screen = join(map(range(1, term_getsize(a:buffer)[0]), {_, row -> term_getline(a:buffer, row)}), "\n")
+    let stable = stridx(screen, 'Branch> ' . a:query) >= 0 && (a:query == '' || screen =~ '\s1/\d\+') ? stable + 1 : 0
+  endwhile
+  call assert_equal(2, stable, 'actual branch query and unique match are stable before Enter')
+endfunction
+edit file
+call setline(1, 'UNSAVED branch picker')
+let userbuf = bufnr()
+let origin = win_getid()
+setlocal bufhidden=wipe
+set nohidden autowrite autowriteall
+let options = [&hidden, &autowrite, &autowriteall]
+if full_checks
+  let g:fzf_layout = {'window': 'enew'}
+else
+  unlet! g:fzf_layout
+endif
+let $FZF_DEFAULT_OPTS = '--filter="REMOTE origin/pick-target" --print-query --expect=enter --multi --accept-nth=2'
+DiffviewBranch -- src
+call WaitBranch()
+call BranchPair()
+DiffviewRefresh
+call BranchPair()
+call win_gotoid(origin)
+execute 'tcd ' . fnameescape(branch_repo)
+let $FZF_DEFAULT_OPTS = '--filter=NO_MATCH_BRANCH'
+let old_buffers = map(['panel', 'left', 'right'], {_, role -> BranchRole(role)})
+DiffviewBranch -- src
+call WaitBranch()
+call assert_equal(old_buffers, map(['panel', 'left', 'right'], {_, role -> BranchRole(role)}))
+call assert_equal(2, haslocaldir())
+call BranchPair()
+if full_checks
+  let g:fzf_layout = {'window': 'enew'}
+  let $FZF_DEFAULT_OPTS = ''
+  DiffviewBranch -- src
+  let terminal = filter(getbufinfo(), {_, b -> getbufvar(b.bufnr, '&filetype') == 'fzf'})[0].bufnr
+  execute 'tcd ' . fnameescape(other_repo)
+  let chosen_cwd = getcwd()
+  call BranchReady(terminal, '')
+  call term_sendkeys(terminal, 'REMOTE origin/pick-target')
+  call BranchReady(terminal, 'REMOTE origin/pick-target')
+  call term_sendkeys(terminal, "\<CR>")
+  call WaitBranch()
+  call BranchPair()
+  let location = win_id2tabwin(origin)
+  call assert_equal([chosen_cwd, 2], [getcwd(location[1], location[0]), haslocaldir(location[1], location[0])])
+  call win_gotoid(origin)
+  execute 'tcd ' . fnameescape(branch_repo)
+  let resources = [map(getbufinfo(), {_, b -> b.bufnr}), map(getwininfo(), {_, w -> [w.winid, w.bufnr]})]
+  for layout in ['enew', 'default']
+    if layout == 'enew' | let g:fzf_layout = {'window': 'enew'} | else | unlet! g:fzf_layout | endif
+    let g:branch_user_job = job_start(['sleep', '30'])
+    call assert_equal('run', job_status(g:branch_user_job), 'user job fixture is actually alive before launch')
+    augroup DiffviewBranchFailure
+      autocmd FileType fzf let g:branch_failed_job = term_getjob(bufnr()) | let g:branch_failed_status = job_status(g:branch_failed_job) | throw 'branch live terminal fixture'
+    augroup END
+    DiffviewBranch
+    augroup DiffviewBranchFailure
+      autocmd!
+    augroup END
+    call assert_equal('run', job_status(g:branch_user_job), 'branch rollback retains an unrelated long-running user job')
+    call job_stop(g:branch_user_job, 'kill')
+    call WaitBranch()
+    call assert_equal('run', g:branch_failed_status)
+    call assert_equal('dead', job_status(g:branch_failed_job))
+    call assert_match('Cannot open fzf: branch live terminal fixture', execute('messages'))
+    call assert_equal(origin, win_getid())
+    call assert_equal(userbuf, bufnr())
+    call assert_equal(resources, [map(getbufinfo(), {_, b -> b.bufnr}), map(getwininfo(), {_, w -> [w.winid, w.bufnr]})])
+    call assert_equal(2, haslocaldir())
+  endfor
+endif
+function! fzf#run(spec) abort
+  let g:branch_spec = a:spec
+  let g:branch_calls = get(g:, 'branch_calls', 0) + 1
+endfunction
+DiffviewBranch -- src
+call assert_equal(5, len(g:branch_spec.source), 'distinct local/remote refs survive shared OIDs; symbolic alias/tag excluded')
+call assert_equal(-1, stridx(join(g:branch_spec.source, "\n"), 'origin/HEAD'))
+let row = filter(copy(g:branch_spec.source), {_, value -> stridx(value, 'REMOTE origin/pick-target') >= 0})[0]
+let saved_head = readfile(branch_repo . '/.git/HEAD', 'b')
+let saved_target = readfile(branch_repo . '/.git/refs/remotes/origin/pick-target', 'b')
+try
+  call writefile([base_oid], branch_repo . '/.git/HEAD')
+  call writefile([base_oid], branch_repo . '/.git/refs/remotes/origin/pick-target')
+  execute 'lcd ' . fnameescape(other_repo)
+  call call(g:branch_spec.exit, [0])
+  call g:branch_spec.sinklist([row])
+  call BranchPair()
+  call assert_equal(resolve(other_repo), getcwd())
+  DiffviewRefresh
+  call BranchPair()
+  call assert_equal(['Filter: src'], getbufline(BranchRole('panel'), 4))
+  call assert_equal(1, g:branch_calls, 'branch Refresh never reopens fzf')
+  let old_buffers = map(['panel', 'left', 'right'], {_, role -> BranchRole(role)})
+  for output in [[], 23, [23], ['not a branch'], [row . ' altered'], [row, row]]
+    call g:branch_spec.sinklist(output)
+    call assert_equal(old_buffers, map(['panel', 'left', 'right'], {_, role -> BranchRole(role)}))
+    call BranchPair()
+  endfor
+  let saved_path = $PATH
+  let $PATH = ''
+  call g:branch_spec.sinklist([row])
+  let $PATH = saved_path
+  call assert_equal(old_buffers, map(['panel', 'left', 'right'], {_, role -> BranchRole(role)}))
+  call BranchPair()
+finally
+  call writefile(saved_head, branch_repo . '/.git/HEAD', 'b')
+  call writefile(saved_target, branch_repo . '/.git/refs/remotes/origin/pick-target', 'b')
+endtry
+call assert_equal(['UNSAVED branch picker'], getbufline(userbuf, 1, '$'))
+call assert_true(getbufvar(userbuf, '&modified'))
+call assert_equal('wipe', getbufvar(userbuf, '&bufhidden'))
+call assert_equal(options, [&hidden, &autowrite, &autowriteall])
+DiffviewClose
+''', directory)
+            after_branch_picker = {str(p.relative_to(branch_repo)): (p.stat().st_mode, p.read_bytes())
+                                   for p in branch_repo.rglob("*") if p.is_file()}
+            assert before_branch_picker == after_branch_picker, "Branch picker preserves every byte/mode after declared ref actors restore"
+        print("PASS: real branch fzf selection/no-match SHA1/SHA256, async tcd, default/enew live-job rollback; captured-spec fixed tips/root/prefixes and rejection")
     else:
         print("NOT RUN: optional fzf picker smoke (set FZF_RUNTIME to its core checkout)")
 
-print("PASS: local sources/safety/lifecycle/paths; trees, root/normal/merge commits, ref refresh, invalid arguments, legacy wrappers; index/object/disk preservation")
+print("PASS: local sources/safety/lifecycle/paths; trees, root/normal/merge commits, ref refresh, invalid arguments, toggle; index/object/disk preservation")

@@ -283,7 +283,13 @@ export def Refresh()
         return
     endif
     try
-        Replace(git.Project(git.Comparison(view.model.root, view.model.args, view.model.mode == 'commit'), view.model.paths))
+        var model = git.Comparison(view.model.root, view.model.args, view.model.mode == 'commit')
+        if has_key(view.model, 'branchLabels')
+            model.branchLabels = view.model.branchLabels
+            model.leftSource = model.branchLabels.left
+            model.rightSource = model.branchLabels.right
+        endif
+        Replace(git.Project(model, view.model.paths))
     catch
         Error(v:exception)
     endtry
@@ -391,7 +397,7 @@ export def OpenRequest(args: list<string>)
     endtry
 enddef
 
-export def Open(args: list<string>, commit = false, root = '', paths: list<string> = [])
+export def Open(args: list<string>, commit = false, root = '', paths: list<string> = [], labels: dict<string> = {})
     var creating = false
     var previous: dict<any> = {}
     var previousFocus = 0
@@ -402,7 +408,13 @@ export def Open(args: list<string>, commit = false, root = '', paths: list<strin
             throw '[diffview] Usage: DiffviewOpen [left right]'
         endif
         tree.Check()
-        var model = git.Project(git.Comparison(root == '' ? git.Root() : root, args, commit), paths)
+        var model = git.Comparison(root == '' ? git.Root() : root, args, commit)
+        if !empty(labels)
+            model.branchLabels = copy(labels)
+            model.leftSource = labels.left
+            model.rightSource = labels.right
+        endif
+        model = git.Project(model, paths)
         var candidate = tree.Build(model)
         var content = empty(model.entries) ? {} : git.Read(model, model.entries[0])
         var origin = empty(view) ? win_getid() : view.origin
@@ -456,7 +468,12 @@ export def Open(args: list<string>, commit = false, root = '', paths: list<strin
     endtry
 enddef
 
-def SelectedCommit(root: string, source: list<string>, origin: dict<any>, paths: list<string>, lines: any)
+def OpenBranch(snapshot: dict<any>, target: dict<any>, paths: list<string>)
+    Open([target.oid, snapshot.head], false, snapshot.root, paths,
+        {left: target.label .. ' ' .. target.oid[0 : 6], right: snapshot.label .. ' ' .. snapshot.head[0 : 6]})
+enddef
+
+def Selected(root: string, source: list<string>, origin: dict<any>, paths: list<string>, lines: any, snapshot: dict<any>)
     if get(origin, 'directoryScope', 0) == 2
         var pushed = getwinvar(origin.window, 'fzf_pushd', {})
         if get(pushed, 'origin', '') == origin.directory
@@ -464,23 +481,28 @@ def SelectedCommit(root: string, source: list<string>, origin: dict<any>, paths:
             pushed.command = 'tcd'
         endif
     endif
+    var kind = empty(snapshot) ? 'commit' : 'branch'
     if type(lines) != v:t_list
-        Error('Invalid fzf commit selection.')
+        Error('Invalid fzf ' .. kind .. ' selection.')
         return
     elseif empty(lines)
         return
     endif
     if len(lines) != 1 || type(lines[0]) != v:t_string || index(source, lines[0]) < 0
-        Error('Invalid fzf commit selection.')
+        Error('Invalid fzf ' .. kind .. ' selection.')
         return
     endif
-    var oid = matchstr(lines[0], '^\x\+\ze\t')
-    if index([40, 64], strlen(oid)) < 0
+    var oid = empty(snapshot) ? matchstr(lines[0], '^\x\+\ze\t') : ''
+    if empty(snapshot) && index([40, 64], strlen(oid)) < 0
         Error('Invalid fzf commit object ID.')
         return
     endif
     var cwd = getcwd(-1)
-    Open([oid], true, root, paths)
+    if empty(snapshot)
+        Open([oid], true, root, paths)
+    else
+        OpenBranch(snapshot, snapshot.targets[index(source, lines[0])], paths)
+    endif
     if getcwd(-1) != cwd
         # Closing a prior tab can restore the global cwd left by an in-place picker.
         var local = haslocaldir()
@@ -535,23 +557,20 @@ def RollbackPicker(origin: dict<any>)
     endif
 enddef
 
-export def Commit(args: list<string>)
+def Pick(commit: bool, paths: list<string>)
     try
-        var request = Arguments(args)
-        if !empty(request.revisions)
-            Open(request.revisions, true, '', request.paths)
-            return
-        endif
         tree.Check()
         if !exists('*fzf#run') || !exists('*fzf#wrap') || !exists('*fzf#exec') || !executable('fzf')
-            throw '[diffview] Install junegunn/fzf and put fzf on PATH, or use DiffviewCommit HEAD.'
+            throw '[diffview] Install junegunn/fzf and put fzf on PATH, or use '
+                .. (commit ? 'DiffviewCommit HEAD.' : 'DiffviewBranch {branch}.')
         endif
         # Do not let the dependency offer to download an incompatible binary.
         fzf#exec('0.0.0', 1)
         var root = git.Root()
-        var source = git.Commits(root)
+        var snapshot = commit ? {} : git.Branches(root)
+        var source: list<string> = commit ? git.Commits(root) : mapnew(snapshot.targets, (_, target) => target.row)
         if empty(source)
-            throw '[diffview] No commits to select.'
+            throw '[diffview] No ' .. (commit ? 'commits' : 'branches') .. ' to select.'
         endif
         var hidden = &hidden
         var autowrite = &autowrite
@@ -568,10 +587,11 @@ export def Commit(args: list<string>)
             origin.options[name] = getwinvar(origin.window, '&' .. name)
         endfor
         var picker = fzf#wrap({source: source,
-            sinklist: (lines) => SelectedCommit(root, source, origin, request.paths, lines),
+            sinklist: (lines) => Selected(root, source, origin, paths, lines, snapshot),
             exit: (code) => PickerExit(origin, code),
             options: ['--no-multi', '--no-print-query', '--no-expect', '--no-print0', '--no-read0',
-                '--accept-nth=..', '--delimiter=\t', '--with-nth=2..', '--nth=..', '--prompt=Commit> ']})
+                '--accept-nth=..', '--delimiter=\t', '--with-nth=2..', '--nth=..',
+                '--prompt=' .. (commit ? 'Commit> ' : 'Branch> ')]})
         try
             # An in-place fzf layout must retain the caller without saving it.
             set hidden noautowrite noautowriteall
@@ -602,6 +622,50 @@ export def Commit(args: list<string>)
                 setbufvar(caller, '&bufhidden', bufferHidden)
             endif
         endtry
+    catch
+        Error(v:exception)
+    endtry
+enddef
+
+export def Commit(args: list<string>)
+    try
+        var request = Arguments(args)
+        if !empty(request.revisions)
+            Open(request.revisions, true, '', request.paths)
+        else
+            Pick(true, request.paths)
+        endif
+    catch
+        Error(v:exception)
+    endtry
+enddef
+
+export def Branch(args: list<string>)
+    try
+        var request = Arguments(args)
+        if len(request.revisions) > 1
+            throw '[diffview] Usage: DiffviewBranch [branch] [-- paths...]'
+        endif
+        if empty(request.revisions)
+            Pick(false, request.paths)
+            return
+        endif
+        tree.Check()
+        var name = request.revisions[0]
+        if name == '' || name[0] == '-'
+            throw '[diffview] Invalid branch name: ' .. git.Display(name)
+        endif
+        var snapshot = git.Branches(git.Root())
+        var refs = stridx(name, 'refs/') == 0 ? [name] : ['refs/heads/' .. name, 'refs/remotes/' .. name]
+        for ref in refs
+            for target in snapshot.targets
+                if target.ref == ref
+                    OpenBranch(snapshot, target, request.paths)
+                    return
+                endif
+            endfor
+        endfor
+        throw '[diffview] Branch not found: ' .. git.Display(name)
     catch
         Error(v:exception)
     endtry

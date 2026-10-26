@@ -189,6 +189,43 @@ def Resolve(root: string, revision: string, kind: string): string
     return ''
 enddef
 
+export def Branches(root: string): dict<any>
+    var head = Resolve(root, 'HEAD', 'commit')
+    if head !~ '^\x\+$' || index([40, 64], strlen(head)) < 0
+        throw '[diffview] Malformed Git HEAD identity.'
+    endif
+    var current = Text(Run(root, ['symbolic-ref', '--quiet', 'HEAD'], true))
+    var label = current == '' ? 'detached HEAD'
+        : 'HEAD ' .. (stridx(current, 'refs/heads/') == 0 ? strpart(current, 11) : current)
+    var targets: list<dict<any>> = []
+    # Ref names cannot contain LF or NUL; format fields use NUL within each record.
+    for record in Run(root, ['for-each-ref', '--sort=refname',
+        '--format=%(refname)%00%(objectname)%00%(objecttype)%00%(symref)', 'refs/heads/', 'refs/remotes/'])
+        if record == ''
+            continue
+        endif
+        var fields = split(record, "\n", true)
+        if len(fields) != 4
+            throw '[diffview] Malformed Git branch record.'
+        endif
+        if fields[3] != '' || fields[2] != 'commit'
+            continue
+        endif
+        var ref = fields[0]
+        var oid = fields[1]
+        var local = stridx(ref, 'refs/heads/') == 0
+        if (!local && stridx(ref, 'refs/remotes/') != 0) || oid !~ '^\x\+$'
+            || index([40, 64], strlen(oid)) < 0
+            throw '[diffview] Malformed Git branch identity.'
+        endif
+        var name = strpart(ref, local ? 11 : 13)
+        var source = (local ? 'LOCAL ' : 'REMOTE ') .. name
+        add(targets, {ref: ref, oid: oid, label: source,
+            row: json_encode([ref, oid]) .. "\t" .. Display(source) .. ' ' .. oid[0 : 11]})
+    endfor
+    return {root: root, head: head, label: label, targets: targets}
+enddef
+
 def TreeSource(root: string, revision: string): dict<any>
     try
         var commit = Resolve(root, revision, 'commit')

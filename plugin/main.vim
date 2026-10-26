@@ -31,14 +31,10 @@ def g:ToggleDiffView()
     current.Toggle()
 enddef
 
-def g:DiffBranch(branch0: string)
-    current.Open([branch0, 'HEAD'])
-enddef
-
 command! -nargs=* DiffviewOpen call current.OpenRequest([<f-args>])
 command! -nargs=* DiffviewCommit call current.Commit([<f-args>])
+command! -nargs=* DiffviewBranch call current.Branch([<f-args>])
 command! -nargs=0 DiffviewRefresh call current.Refresh()
 command! -nargs=0 DiffviewClose call current.Close()
 command! -nargs=* DiffviewFilter call current.Filter([<f-args>])
 command! -nargs=0 DiffviewGotoFile call current.GotoFile()
-command! -nargs=1 DiffBranch call g:DiffBranch(<f-args>)
