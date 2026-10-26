@@ -5,6 +5,8 @@ mkdir -p "$reading/nav" "$reading/src/deep" "$reading/src2" \
     "$reading/old dir" "$reading/new dir" "$reading/one part" "$reading/two part" "$reading/colon:dir"
 printf 'def head():\n    return 1\n' > "$reading/code.py"
 printf 'int amount = 1;\n' > "$reading/code.c"
+reading_literal_drive='C:\literal.txt'
+printf 'HEAD literal drive\n' > "$reading/$reading_literal_drive"
 printf '# rename comment\nint amount = 1;\ndef renamed():\n    return 1\n' > "$reading/move.py"
 printf 'def navigation_rename():\n    return 17\n' > "$reading/old dir/same.py"
 printf 'def historical():\n    return 1\n' > "$reading/historical.py"
@@ -56,6 +58,7 @@ git -C "$reading" mv 'old dir/same.py' 'new dir/same.c'
 git -C "$reading" add empty-added.py
 printf 'def worktree():\n    return 3\n' > "$reading/code.py"
 printf 'int amount = 2;\n' > "$reading/code.c"
+printf 'DISK literal drive\n' > "$reading/$reading_literal_drive"
 : > "$reading/empty.py"
 printf 'def still_unknown():\n    return 2\n' > "$reading/unknown.diffview_unknown"
 printf '#!/usr/bin/python3\ndef launch():\n    return 2\n' > "$reading/script"
@@ -93,6 +96,7 @@ git --no-optional-locks -c diff.autoRefreshIndex=false -C "$reading" \
     > "$test_tmp/reading-root.numstat"
 git -C "$reading" diff --cached --name-status > "$test_tmp/reading-renames.control"
 test "$(git -C "$reading" show :code.py | head -n 1)" = 'def indexed():'
+test "$(git -C "$reading" show "HEAD:$reading_literal_drive")" = 'HEAD literal drive'
 test "$(git -C "$reading" show reading-left:historical.py | head -n 1)" = 'def historical():'
 test "$(git -C "$reading" diff --numstat -- stats.txt)" = "$(printf '3\t2\tstats.txt')"
 test "$(git -C "$reading" diff --numstat -- mode.txt)" = "$(printf '0\t0\tmode.txt')"

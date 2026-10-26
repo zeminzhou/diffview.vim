@@ -2112,6 +2112,11 @@ def ReadingSyntax()
     Select('Unstaged', 'unknown.diffview_unknown')
     PlainSyntax('left')
     PlainSyntax('right')
+    var literal_drive = 'C:' .. nr2char(92) .. 'literal.txt'
+    Select('Unstaged', literal_drive)
+    Pair(['HEAD literal drive'], ['DISK literal drive'])
+    assert_equal(literal_drive, getbufvar(Role('left').bufnr, 'diffview_path'))
+    assert_equal(literal_drive, getbufvar(Role('right').bufnr, 'diffview_path'), 'POSIX backslash stays a raw filename byte')
     for path in ['binary.py', 'forced.py', 'link.py']
       Select('Unstaged', path)
       Unavailable('\cBinary\|unsupported\|symlink')
@@ -2345,6 +2350,12 @@ def ReadingGoto()
     augroup END
     setbufline(target, 1, target_body)
   endtry
+  var literal_drive = 'C:' .. nr2char(92) .. 'literal.txt'
+  Select('Unstaged', literal_drive)
+  Pair(['HEAD literal drive'], ['DISK literal drive'])
+  win_gotoid(Role('right').winid)
+  var literalbuf = GotoCheck(repo .. '/' .. literal_drive, 1)
+  assert_equal(['DISK literal drive'], getbufline(literalbuf, 1, '$'), 'actual gf reads the exact POSIX drive-shaped filename')
   execute 'cd ' .. fnameescape(test_tmp .. '/special')
   DiffviewOpen
   for path in ['space 中文.txt', '-leading.txt', "semi;$(touch INJECTED)|quote'\".txt",
@@ -2415,7 +2426,7 @@ def ReadingGoto()
   assert_true(getbufvar(target, '&modified'))
   win_gotoid(getwininfo()->filter((_, w) => w.bufnr == newbuf)[0].winid)
   execute 'DiffviewClose'
-  assert_true(bufexists(newbuf) && bufexists(oldbuf), 'Close never wipes normal navigation buffers')
+  assert_true(bufexists(newbuf) && bufexists(oldbuf) && bufexists(literalbuf), 'Close never wipes normal navigation buffers')
   assert_true(!empty(getwininfo()->filter((_, w) => w.bufnr == newbuf)), 'Close keeps the user navigation tab')
   assert_equal(['CURRENT first', 'CURRENT second'], readfile(repo .. '/nav/target.py'))
   assert_equal(['def worktree():', '    return 3'], readfile(repo .. '/code.py'))
@@ -2456,6 +2467,16 @@ def ReadingFilter()
   var registers = RegisterState()
   DiffviewOpen
   var full = EntryKeys()
+  var literal_drive = 'C:' .. nr2char(92) .. 'literal.txt'
+  SetProjection([literal_drive])
+  assert_equal(['Unstaged:' .. literal_drive], EntryKeys(), 'valid POSIX drive-shaped prefix remains literal')
+  Select('Unstaged', literal_drive)
+  Pair(['HEAD literal drive'], ['DISK literal drive'])
+  execute 'DiffviewOpen -- ' .. escape(literal_drive, " \t\\")
+  assert_equal(['Unstaged:' .. literal_drive], EntryKeys(), 'initial Open accepts the same literal prefix')
+  assert_equal(literal_drive, Node('Unstaged', literal_drive).diffview_entry.path)
+  DiffviewOpen
+  assert_equal(full, EntryKeys())
   var wrapper_state = ComparisonState()
   Reject('DiffBranch --')
   assert_equal(wrapper_state, ComparisonState(), 'legacy wrapper still treats -- as an invalid revision')

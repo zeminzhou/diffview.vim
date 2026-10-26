@@ -186,3 +186,6 @@ wrapper boundary supplies malformed numeric output only for the rejection
 checks; it does not replace the real count, syntax, tree or fzf integrations.
 The four reading groups are prepared tests, not evidence of product PASS until
 the complete candidate-owned runner and same-candidate terminal checks execute.
+The POSIX reading fixture also tracks a filename C:\literal.txt; Open,
+projection and actual gf must keep its colon and single backslash intact.
+Absolute/traversal filters and use-time symlink checks remain rejection cases.
