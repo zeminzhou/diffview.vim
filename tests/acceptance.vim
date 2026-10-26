@@ -3688,6 +3688,7 @@ def PreviewIndex(query: string): number
 enddef
 
 def WaitPreview(picker: number, oid: string): list<string>
+  redraw!
   var started = reltime()
   var stable = 0
   var screen: list<string> = []
@@ -3710,7 +3711,7 @@ def WaitPreviewQuiet()
   var quiet = 0
   while quiet < 3 && reltimefloat(reltime(started)) < 5
     var ui = getbufinfo()->filter((_, b) => getbufvar(b.bufnr, '&filetype') == 'fzf')
-    var jobs = job_info()->filter((_, job) => job isnot g:diffview_test_preview_foreign
+    var jobs = job_info()->filter((_, job) => job_info(job).process != job_info(g:diffview_test_preview_foreign).process
       && (job_status(job) == 'run' || index(['open', 'buffered'], ch_status(job_getchannel(job))) >= 0))
     quiet = empty(ui) && empty(jobs) && empty(PreviewContexts()) ? quiet + 1 : 0
     sleep 20m
@@ -3838,7 +3839,7 @@ def PreviewBoundary()
   var saved_path = $PATH
   var isolated = test_tmp .. '/no-xargs-bin'
   mkdir(isolated, 'p')
-  for executable in ['git', 'fzf', 'vim']
+  for executable in ['git', 'fzf', 'vim', 'mktemp', 'mv']
     var resolved = exepath(executable)
     system('ln -s ' .. shellescape(resolved) .. ' ' .. shellescape(isolated .. '/' .. executable))
   endfor
