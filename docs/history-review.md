@@ -30,8 +30,9 @@ Examples:
 ```
 
 File and line history use the existing optional core fzf installation and binary.
-Direct merge-base comparisons do not require fzf. No separate fzf.vim, Python,
-Node, pager or external diff dependency is introduced.
+Direct merge-base comparisons do not require fzf. Preview transport uses the
+existing system xargs with NUL-input support on the verified Unix platform.
+No separate fzf.vim, Python, Node, pager or external diff dependency is introduced.
 
 ## Context, path identity and starting objects
 
@@ -192,21 +193,42 @@ Only the focused commit is loaded; a preview failure displays a local tagged
 error while the picker/old comparison remain usable. It must not silently open
 a comparison, accept another row or turn into successful blank output.
 
-Use one small, isolated preview worker with the existing Vim executable/Git
-capabilities. Prefer reusing the protected argv Git code in a native Vim worker;
-the fzf shell boundary may contain only properly quoted fixed executable/helper
-and context paths plus a restricted numeric token or complete validated OID.
+Use one small preview helper with native Vim modes for argument validation and
+output formatting, joined by a fixed pipeline through system `xargs -0` and Git.
+Do not start Git with `job_start()` inside the preview Vim process: actual core
+fzf cancellation SIGKILLs its preview group, while Vim jobs can escape into their
+own groups and outlive the worker. The argument stage validates the captured
+source token and emits only NUL-delimited argv data; xargs executes the fixed Git
+read command with those arguments, and the formatting stage escapes/limits output.
+Git and both native Vim stages must inherit the fzf preview process group; no
+detached jobs, setsid or extra process-group supervisors. Share the existing Git
+read-only flags/command construction where possible, retaining optional-lock,
+autoRefreshIndex, literal-path, no-ext-diff/textconv/pager protections exactly.
+
+The fzf shell boundary may contain only a fixed pipeline with properly quoted
+executable/helper/context paths plus a restricted numeric token or full OID.
 Never interpolate raw root/file/branch/author/subject/message into executable
 shell text, `eval`, an Ex expression or an unquoted fzf placeholder. Capture the
 original root, eligible source tuples and filters in a private per-picker 0700
 directory, using JSON/binary-safe data for paths; worker must validate the token
 against that immutable source context. No network/default external command.
 
-The worker runs without user init/plugins/packpath/modelines, uses only the
-captured data and protected Git runner, and prints preview text to stdout.
-Prove actual core placeholder framing and worker dispatch with native controls
-before choosing the final small helper protocol. If the proposed worker cannot
-meet job ownership/cancellation guarantees, report concrete evidence to PM;
+Native stages run without user init/plugins/packpath/modelines, use only captured
+data and print final preview text to stdout. Xargs transports literal arguments;
+never use eval, `sh -c` with substituted data, a command obtained from metadata or
+shell splitting to reconstruct them. A validated request must execute exactly
+one intended read command, without silently chunking it into different queries.
+Invalid/empty tokens or context must not fall back to a default Git invocation
+or HEAD. Verify actual xargs empty-input/exit semantics and preserve a Git failure
+as a tagged preview error; pipeline success alone cannot prove Git success.
+Missing/incompatible system xargs disables only the preview with a clear local
+dependency error, while normal picker selection and direct commands still work.
+No installation/download is attempted.
+
+Prove actual core numeric-placeholder framing, NUL transport (including newline
+and shell-punctuation paths), command status/error propagation, group inheritance
+and no surviving owned Git/native stages after rapid focus/cancel/accept before
+declaring this mechanism feasible. If it fails, report concrete evidence to PM;
 do not grow a daemon/provider framework or add an interpreter dependency.
 
 Core fzf preview work runs outside the main editor interaction. Fast focus
