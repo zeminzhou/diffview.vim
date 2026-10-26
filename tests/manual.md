@@ -138,3 +138,23 @@ queries/keys, layout/focus/cwd, committed source labels and complete byte
 comparisons. Keep injected callback/job faults and native editor prompts
 separate from ordinary terminal flows. Do not run the removed legacy entry
 points or infer Branch acceptance from old Commit terminal evidence.
+
+For history/review acceptance, use the frozen candidate with a disposable file
+trail that has an edit, rename, insertion/movement, merge, deletion and recreate,
+plus known unique/unrelated/criss-cross merge-base endpoints. Keep real core
+previews enabled; record its actual selected executable and system xargs.
+
+| History/review step | Expected |
+| --- | --- |
+| With a dirty ordinary file and unrelated cwd, run FileHistory and select an older rename/edit/root | Original file repository/start/path are captured; first-parent/follows-renames is visible; acceptance shows full historical file snapshots with actual old/new identities |
+| From each content side and a real tree leaf run FileHistory; then use a committed content range for LineHistory | Side/panel/proven subtree endpoint is correct; numeric/visual range traces native Git and acceptance remains a whole-file comparison |
+| Try a dirty/mismatched line buffer, root EMPTY side, panel line request or unknown tree | Clear error and exact old view/caller/unsaved state retained; no guessed mapping or reload/save |
+| Move focus rapidly, scroll preview, press Ctrl-/ off/on, query and Enter; repeat Esc/Ctrl-C in default and enew | Actual focused full identity/message/first-parent patch matches the selected view; owned workers/Git/context stop after exit, unrelated jobs remain running |
+| Select root, merge, special-path and large-message/patch rows | Preview uses EMPTY/first-parent semantics, escapes controls and shows marked 2000-line/4096-byte limits; metadata/paths never execute shell/extdiff/textconv/pager |
+| Open and Branch with --merge-base; compare with direct default, move refs/cwd and refresh | Unique captured base-to-right tips/labels/prefix/root stay fixed; zero or multiple bases reject; no fetch or virtual base |
+| Return to ordinary Commit/Branch, filter/clear/gf/r/q and inspect registers/dirty/tree/resources | Existing behavior stays usable, no unexpected prompt or owned UI/job/context leak, all fixture bytes unchanged |
+
+Record actual worker start before kill/cleanup claims, not merely an empty job
+list after a fast query. Separate filtered transport, run-boundary injection,
+declared slow/error actors and normal physical UI results. Keep native tagged
+fault acknowledgements separate from ordinary zero-unexpected-prompt claims.

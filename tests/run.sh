@@ -36,6 +36,7 @@ unset GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
 unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS
 unset FZF_DEFAULT_OPTS FZF_DEFAULT_OPTS_FILE FZF_DEFAULT_COMMAND
 unset DIFFVIEW_TEST_BAD_NUMSTAT
+unset DIFFVIEW_TEST_PREVIEW_BAD_OID DIFFVIEW_TEST_PREVIEW_FIFO DIFFVIEW_TEST_PREVIEW_PROCESS_LOG
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_OPTIONAL_LOCKS=0
 export GIT_ATTR_NOSYSTEM=1
 export GIT_AUTHOR_NAME=Tester GIT_AUTHOR_EMAIL=tester@example.invalid
@@ -146,6 +147,7 @@ printf 'OUTSIDE fixture marker\n' > "$test_tmp/outside/forced.dat"
 . "$root/tests/fixtures-picker.sh"
 . "$root/tests/fixtures-reading.sh"
 . "$root/tests/fixtures-branch.sh"
+. "$root/tests/fixtures-history.sh"
 
 # Compare all fixture bytes, including indexes/objects, after Vim exits.
 cp -R "$test_tmp/local repo 中文" "$test_tmp/local-before"
@@ -213,6 +215,17 @@ cat > "$test_tmp/git-bin/git" <<'EOF'
 #!/bin/sh
 printf '%s\000' "$@" >> "$DIFFVIEW_TEST_GIT_LOG"
 printf '\n' >> "$DIFFVIEW_TEST_GIT_LOG"
+if [ -n "${DIFFVIEW_TEST_PREVIEW_PROCESS_LOG:-}" ]; then
+    /bin/ps -p "$$" -o pid=,ppid=,pgid=,state=,command= >> "$DIFFVIEW_TEST_PREVIEW_PROCESS_LOG"
+fi
+if [ -n "${DIFFVIEW_TEST_PREVIEW_BAD_OID:-}" ]; then
+    for argument do
+        if [ "$argument" = show ]; then
+            printf 'commit %s\nDIFFVIEW_PREVIEW_STATUS:0\n' "$DIFFVIEW_TEST_PREVIEW_BAD_OID"
+            exit 71
+        fi
+    done
+fi
 if [ -n "${DIFFVIEW_TEST_BAD_NUMSTAT:-}" ]; then
     for argument do
         if [ "$argument" = diff ] || [ "$argument" = diff-tree ]; then
@@ -229,6 +242,18 @@ if [ "${DIFFVIEW_TEST_FAIL_LOG:-0}" = 1 ]; then
         fi
     done
 fi
+if [ -n "${DIFFVIEW_TEST_PREVIEW_FIFO:-}" ]; then
+    preview_arguments_left=$#
+    while [ "$preview_arguments_left" -gt 0 ]; do
+        preview_argument=$1
+        shift
+        set -- "$@" "$preview_argument"
+        if [ "$preview_argument" = show ]; then
+            set -- "$@" "--output=$DIFFVIEW_TEST_PREVIEW_FIFO"
+        fi
+        preview_arguments_left=$((preview_arguments_left - 1))
+    done
+fi
 exec "$DIFFVIEW_TEST_REAL_GIT" "$@"
 EOF
 chmod +x "$test_tmp/git-bin/git"
@@ -239,7 +264,8 @@ test_cases='local clean unborn nonrepo special refresh lifecycle ownership ances
     binary_clean binary_mixed large empty_start tree_nodes tree_history tree_isolation dependency tree_rollback
     picker_real picker_no_match picker_enew picker_async picker_sha256 picker_missing picker_old_binary picker_errors picker_api
     reading_syntax reading_goto reading_filter reading_stats
-    branch_direct branch_real branch_api branch_lifecycle'
+    branch_direct branch_real branch_api branch_lifecycle
+    history_file history_line history_mergebase history_api history_preview'
 if [ -n "${NERDTREE_GIT_RUNTIME:-}" ]; then
     test_cases="$test_cases tree_git"
 else
@@ -247,6 +273,11 @@ else
 fi
 for test_case in $test_cases; do
     export DIFFVIEW_TEST_CASE="$test_case"
+    if [ "$test_case" = history_preview ] || [ "$test_case" = history_api ]; then
+        mkdir -p "$test_tmp/preview-temp"
+        export TMPDIR="$test_tmp/preview-temp"
+        export DIFFVIEW_TEST_PREVIEW_PROCESS_LOG="$test_tmp/preview-process.log"
+    fi
     if "${VIM:-vim}" -Nu NONE -U NONE -i NONE -n -es \
         -V1"$test_tmp/$test_case.vim.log" -S "$root/tests/acceptance.vim" \
         > "$test_tmp/$test_case.stdout" 2>&1 && [ -f "$test_tmp/$test_case.result" ]; then
@@ -275,6 +306,9 @@ diff -r "$test_tmp/reading-before" "$test_tmp/reading repo"
 diff -r "$test_tmp/reading-outside-before" "$test_tmp/reading-outside"
 diff -r "$test_tmp/branch repo-before" "$test_tmp/branch repo"
 diff -r "$test_tmp/branch-sha256-before" "$test_tmp/branch-sha256"
+for fixture in 'history review' history-review256 history-shallow history-bases; do
+    diff -r "$test_tmp/$fixture-before" "$test_tmp/$fixture"
+done
 
 diff -r "$test_tmp/local-before" "$test_tmp/local repo 中文"
 diff -r "$test_tmp/clean-before" "$test_tmp/clean"

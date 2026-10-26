@@ -1,8 +1,8 @@
 # Acceptance tests
 
-The suite retains all 28 source/safety and NERDTree scenarios, adds nine commit
-picker cases, and compares all 23 fixture repositories/directories byte for byte,
-including indexes and object databases, before and after browsing.
+The complete suite has 50 grouped scenarios and 31 whole-fixture comparisons,
+including the delivered 45 scenarios and 27 fixtures. It compares repository
+indexes, objects, refs and worktree bytes before and after browsing.
 
 Use external NERDTree and core fzf checkouts. Dependencies are never downloaded or vendored
 by the runner:
@@ -14,7 +14,7 @@ git -C "$deps/nerdtree" checkout 690d061b591525890f1471c6675bcb5bdc8cdff9
 git clone https://github.com/Xuyuanp/nerdtree-git-plugin.git "$deps/nerdtree-git-plugin"
 git -C "$deps/nerdtree-git-plugin" checkout e1fe727127a813095854a5b063c15e955a77eafb
 git clone https://github.com/junegunn/fzf.git "$deps/fzf"
-git -C "$deps/fzf" checkout b412a450538e5f4a1d7057732e75d945dafa18a6
+git -C "$deps/fzf" checkout 26ff936df038b6a62ec42cf18db27b2ea2bb8ec3
 NERDTREE_RUNTIME="$deps/nerdtree" \
 NERDTREE_GIT_RUNTIME="$deps/nerdtree-git-plugin" \
 FZF_RUNTIME="$deps/fzf" sh tests/run.sh
@@ -28,9 +28,12 @@ plugin is a compatibility test dependency, not a Diffview runtime requirement.
 `FZF_RUNTIME` and an already installed `fzf` executable on PATH are required for
 the picker integration cases. The separate fzf.vim plugin is not used. Core fzf
 may choose a newer bundled binary instead of PATH's binary; record both versions
-and the actual `fzf#exec()` result printed in the picker facts.
+and the actual `fzf#exec()` result printed in the picker facts. The core plugin
+at this ref is byte-identical to the earlier b412a450 control pin; record the
+actual checkout rather than rewriting the dependency to match older evidence.
 
-The runner requires Git, POSIX shell tools, and Vim 9.1 with `+vim9script`,
+The runner requires Git, POSIX shell tools (including xargs, ps and mkfifo for
+preview transport/ownership controls), and Vim 9.1 with `+vim9script`,
 `+diff`, `+windows`, `+job`, `+timers` and `+terminal`. Override `VIM` to select a Vim executable.
 
 To test a separately checked-out revision, run:
@@ -129,6 +132,11 @@ Additional scenarios:
 | branch_real | Actual core/binary name-filtered local/remote selection and no match in explicit SHA-1/SHA-256 fixtures; symbolic aliases excluded, prefixes/labels/root and both captured tips remain fixed after refs/HEAD/cwd move |
 | branch_api | Captured-run boundary with real core wrap/exec: namespace/source membership, both-OID/original-root/prefix binding, malformed output, launch/read/render rollback and immutable Refresh |
 | branch_lifecycle | Minimal default-popup/enew Branch wiring for dirty initial/late tcd, real binary abort, initialization throw, post-live-job failure and unrelated user job preservation |
+| history_file | Real core/binary first-parent rename/root/delete/recreate selections in both object formats, dirty contextual file despite unrelated cwd, invalid input/no-match and shallow-parent rollback |
+| history_line | Whole-file acceptance of native numeric line traces across inserted/moved ranges, committed-content requirement, subtree provenance, EMPTY/raw-tree/panel refusal and unsaved data preservation |
+| history_mergebase | Unique/ancestor/same base versus direct defaults, immutable Open/direct or real-picker Branch labels/prefixes/root, unrelated/shallow/two-base rejection |
+| history_api | Actual core wrap/exec with only run captured: native CID/path/range oracles, both pane sides/panel/subtree contexts, literal raw names, moved HEAD/cwd, strict callback/read/render rollback; actual preview-command output/status/limits/error boundary |
+| history_preview | Real core terminal previews and focused whole IDs, rapid changes/toggle/cancel/accept, both layouts and provably live Git-at-FileType faults; owned context/process-group cleanup with a foreign user job still running |
 
 Picker fixtures include six HEAD-reachable commits, a merged side branch and an
 excluded branch, Unicode/control/shell punctuation metadata, SHA-1/SHA-256 and
@@ -207,3 +215,25 @@ Branch API injection intercepts only run, sharing the existing captured-spec
 fixture with Commit; real wrap/exec and the original Commit lifecycle assertions
 remain intact. Filtered core selection and generated abort/term_sendkeys actors
 are headless dependency evidence, not physical-key terminal acceptance.
+
+History adds four complete repository comparisons: SHA-1 and SHA-256 review
+trails, a shallow clone and a criss-cross/unrelated-base graph. Native first-parent
+follow/raw and numeric -L oracles are captured before running the product; raw
+paths are not recovered from human patch headers. The planned full suite is
+50 groups and 31 whole-fixture comparisons, including all former 45/27.
+
+The preview group uses a private temp root to observe owned source contexts.
+The existing real-Git wrapper can log PID/PGID and, only in the declared live
+fault check, insert an external FIFO output route before execing actual Git.
+That slow actor proves Git is live before cancellation, rather than mistaking an
+already-finished query for cleanup. A separate output-boundary check supplies
+a nonzero Git result with a forged earlier status-zero line; it must remain a
+local error. Normal selection/source tests continue to use actual Git output.
+No interpreter or alternate worker is installed in the product.
+
+Commit previews share the physical terminal row with the query at narrow
+geometries. The old async query check samples terminal cells in the left half,
+requiring the complete prompt/query and two settled unique-result observations;
+it does not disable preview or relax any post-selection identity/state checks.
+Worker-output commands and captured-run callbacks remain separate scopes from
+real headless fzf preview execution and the final physical-key terminal gate.

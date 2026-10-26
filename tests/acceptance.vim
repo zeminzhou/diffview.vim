@@ -1768,7 +1768,10 @@ def PickerAsync()
   while stable < 2 && reltimefloat(reltime(started)) < 5.0
     term_wait(picker, 20)
     screen = mapnew(range(1, term_getsize(picker)[0]), (_, row) => term_getline(picker, row))
-    var query_seen = !empty(filter(copy(screen), (_, line) => line =~ 'PICK_OLDER\s*$'))
+    var size = term_getsize(picker)
+    var prompt_rows = mapnew(range(1, size[0]), (_, row) =>
+      join(mapnew(term_scrape(picker, row)[0 : size[1] / 2 - 1], (_, cell) => get(cell, 'chars', '')), ''))
+    var query_seen = !empty(filter(prompt_rows, (_, line) => line =~ '^Commit> PICK_OLDER\s*$'))
     var one_match = !empty(filter(copy(screen), (_, line) => line =~ '\<1/6\>'))
     stable = query_seen && one_match ? stable + 1 : 0
   endwhile
@@ -3226,6 +3229,664 @@ def BranchLifecycle()
   DiffviewClose
 enddef
 
+def HistoryCommand(kind: string, revision = '', path = ''): string
+  return 'Diffview' .. kind .. 'History' .. (revision == '' ? '' : ' ' .. escape(revision, " \t\\"))
+    .. (path == '' ? '' : ' -- ' .. escape(path, " \t\\"))
+enddef
+
+def HistoryFiltered(kind: string, query: string, revision = '', path = '')
+  $FZF_DEFAULT_OPTS = '--filter=' .. shellescape(query)
+  execute HistoryCommand(kind, revision, path)
+  WaitPicker()
+enddef
+
+def NativeHistoryOids(name: string): list<string>
+  # This oracle contains only native %H output; raw filenames are never parsed as patch headers.
+  return split(join(readfile(test_tmp .. '/' .. name .. '.oids', 'b'), "\n"), '[^0-9a-f]\+')
+enddef
+
+def HistoryRowsOids(): list<string>
+  var result: list<string> = []
+  for row in g:diffview_test_picker_spec.source
+    var matches = matchstr(row, '\<\x\{64}\>\|\<\x\{40}\>')
+    assert_false(empty(matches), 'source member carries its complete commit identity')
+    add(result, matches)
+  endfor
+  return result
+enddef
+
+def HistoryFixedRefresh(expected: dict<any>)
+  var first = len(PickerGitCalls())
+  var calls = get(g:, 'diffview_test_picker_calls', -1)
+  DiffviewRefresh
+  WaitPicker()
+  assert_equal(expected, ReadingView(), 'selected historical whole-file snapshots/sources remain fixed')
+  assert_equal(calls, get(g:, 'diffview_test_picker_calls', -1), 'history Refresh never opens another picker')
+  for record in PickerGitCalls()[first : ]
+    assert_equal(-1, index(['log', 'merge-base', 'for-each-ref', 'symbolic-ref'], GitSubcommand(record)),
+      'fixed history refresh does not reload history or mutable endpoint provenance')
+  endfor
+enddef
+
+def FileHistory()
+  for item in [['history review', 'history'], ['history-review256', 'history256']]
+    tabnew
+    execute 'cd ' .. fnameescape(test_tmp .. '/' .. item[0])
+    var repo = getcwd()
+    execute 'edit ' .. fnameescape('src/new name.py')
+    setline(1, ['UNSAVED file-history caller'])
+    var userbuf = bufnr()
+    set nohidden autowrite autowriteall
+    SeedRegisters()
+    var registers = RegisterState()
+    execute 'cd ' .. fnameescape(test_tmp .. '/nonrepo')
+    HistoryFiltered('File', 'HIST_EDIT')
+    Pair(['alpha', 'keep', 'old', 'omega'], ['alpha', 'keep', 'edited', 'omega'])
+    assert_equal('src/old.py', getbufvar(Role('right').bufnr, 'diffview_path'), 'history follows actual old spelling')
+    assert_true(stridx(PaneOption('right', 'statusline'), Ref(item[1] .. '-edit')[0 : 6]) >= 0)
+    assert_equal(resolve(repo), resolve(getbufvar(Role('panel').bufnr, 'NERDTree').root.path.str()),
+      'ordinary buffer repository wins unrelated cwd')
+    HistoryFixedRefresh(ReadingView())
+    DiffviewClose
+    execute 'cd ' .. fnameescape(repo)
+    HistoryFiltered('File', 'HIST_RENAME', 'review-merge')
+    Pair(['alpha', 'keep', 'edited', 'omega'], ['alpha', 'keep', 'edited', 'omega'])
+    assert_equal(['src/old.py', 'src/new name.py'],
+      [getbufvar(Role('left').bufnr, 'diffview_path'), getbufvar(Role('right').bufnr, 'diffview_path')])
+    assert_equal(1, len(Entries()), 'historical rename projection excludes a child under its old file spelling')
+    SetProjection([])
+    assert_equal(1, len(Entries()), 'clearing a history filter retains exact file scope')
+    HistoryFixedRefresh(ReadingView())
+    DiffviewClose
+    HistoryFiltered('File', 'HIST_DELETE', Ref(item[1] .. '-delete'), 'src/new name.py')
+    Pair(['inserted', 'edited', 'alpha', 'keep', 'omega'], [''])
+    DiffviewClose
+    HistoryFiltered('File', 'HIST_RECREATE', Ref(item[1] .. '-recreate'), 'src/new name.py')
+    Pair([''], ['recreated unrelated'])
+    DiffviewClose
+    HistoryFiltered('File', 'HIST_ROOT', 'review-merge', 'src/new name.py')
+    Pair([''], ['alpha', 'keep', 'old', 'omega'])
+    assert_equal('src/old.py', getbufvar(Role('right').bufnr, 'diffview_path'))
+    var state = ComparisonState()
+    HistoryFiltered('File', 'NO_HISTORY_MATCH_f92', 'review-merge', 'src/new name.py')
+    assert_equal(state, ComparisonState(), 'real history no match preserves usable view and caller')
+    for command in [HistoryCommand('File', '--version', 'src/new name.py'),
+        'DiffviewFileHistory -- src/old.py other.txt', 'DiffviewFileHistory -- .',
+        'DiffviewFileHistory -- ../outside', 'DiffviewFileHistory -- /absolute',
+        'DiffviewFileHistory -- src', 'DiffviewFileHistory HEAD HEAD -- other.txt',
+        'DiffviewLineHistory -- other.txt']
+      Reject(command)
+      assert_equal(state, ComparisonState(), 'invalid history request does not mutate old state')
+    endfor
+    assert_equal(registers, RegisterState())
+    assert_true(getbufvar(userbuf, '&modified'))
+    assert_equal(['UNSAVED file-history caller'], getbufline(userbuf, 1, '$'))
+    assert_equal(['recreated unrelated'], readfile(repo .. '/src/new name.py'))
+    DiffviewClose
+  endfor
+  execute 'cd ' .. fnameescape(test_tmp .. '/history review')
+  DiffviewCommit HEAD
+  var state = ComparisonState()
+  execute 'cd ' .. fnameescape(test_tmp .. '/history-shallow')
+  $FZF_DEFAULT_OPTS = '--filter=HIST_LIMIT'
+  messages clear
+  v:errmsg = ''
+  execute HistoryCommand('File', '', 'large.txt')
+  WaitPicker()
+  assert_match('\[diffview\]', execute('messages') .. v:errmsg, 'shallow selected-parent failure is tagged')
+  assert_equal(state, ComparisonState(), 'shallow missing first parent retains the old view')
+  DiffviewClose
+enddef
+
+def LineHistory()
+  execute 'cd ' .. fnameescape(test_tmp .. '/history review')
+  execute 'DiffviewCommit ' .. Ref('history-move')
+  Select('', 'src/new name.py')
+  win_gotoid(Role('right').winid)
+  cursor(2, 1)
+  HistoryFiltered('Line', 'HIST_MOVE')
+  Pair(['inserted', 'alpha', 'keep', 'edited', 'omega'], ['inserted', 'edited', 'alpha', 'keep', 'omega'])
+  var state = ReadingView()
+  HistoryFixedRefresh(state)
+  execute 'DiffviewCommit ' .. Ref('history-move')
+  Select('', 'src/new name.py')
+  win_gotoid(Role('right').winid)
+  $FZF_DEFAULT_OPTS = '--filter=HIST_EDIT'
+  execute '1,5DiffviewLineHistory'
+  WaitPicker()
+  Pair(['alpha', 'keep', 'old', 'omega'], ['alpha', 'keep', 'edited', 'omega'])
+  assert_equal('src/old.py', getbufvar(Role('right').bufnr, 'diffview_path'), 'line association uses NUL historical metadata')
+  execute 'DiffviewCommit ' .. Ref('history-insert')
+  Select('', 'src/new name.py')
+  win_gotoid(Role('right').winid)
+  cursor(1, 1)
+  HistoryFiltered('Line', 'HIST_INSERT')
+  Pair(['alpha', 'keep', 'edited', 'omega'], ['inserted', 'alpha', 'keep', 'edited', 'omega'])
+  win_gotoid(Role('right').winid)
+  var before_eol = &endofline
+  setlocal noendofline
+  var rejected = ComparisonState()
+  Reject('DiffviewLineHistory')
+  assert_equal(rejected, ComparisonState(), 'line history includes final EOL in the committed-content requirement')
+  &l:endofline = before_eol
+  execute 'DiffviewCommit ' .. Ref('history-root')
+  Select('', 'binary.bin')
+  win_gotoid(Role('right').winid)
+  rejected = ComparisonState()
+  Reject('DiffviewLineHistory')
+  assert_equal(rejected, ComparisonState(), 'binary source is not a numeric text range')
+  execute 'DiffviewOpen ' .. Ref('history-edit') .. ':src ' .. Ref('history-rename') .. ':src'
+  Select('', 'new name.py')
+  win_gotoid(Role('left').winid)
+  cursor(3, 1)
+  HistoryFiltered('Line', 'HIST_EDIT')
+  Pair(['alpha', 'keep', 'old', 'omega'], ['alpha', 'keep', 'edited', 'omega'])
+  execute 'DiffviewOpen ' .. Ref('history-root-tree') .. ' ' .. Ref('history-tree')
+  Select('', 'src/new name.py')
+  win_gotoid(Role('right').winid)
+  var old = ComparisonState()
+  Reject('DiffviewFileHistory')
+  assert_equal(old, ComparisonState(), 'raw tree has no guessed owning commit')
+  Reject('DiffviewLineHistory')
+  assert_equal(old, ComparisonState())
+  execute 'DiffviewCommit ' .. Ref('history-root')
+  Select('', 'src/old.py')
+  win_gotoid(Role('left').winid)
+  old = ComparisonState()
+  Reject('DiffviewLineHistory')
+  assert_equal(old, ComparisonState(), 'root EMPTY side is not a line history source')
+  win_gotoid(Role('panel').winid)
+  old = ComparisonState()
+  Reject('DiffviewLineHistory')
+  assert_equal(old, ComparisonState(), 'panel is not a line-range source')
+  DiffviewClose
+  execute 'edit ' .. fnameescape('src/new name.py')
+  setline(1, ['UNSAVED mismatched line source'])
+  var userbuf = bufnr()
+  var bytes = getline(1, '$')
+  DiffviewOpen
+  Select('Unstaged', 'other.txt')
+  win_gotoid(getwininfo()->filter((_, w) => w.bufnr == userbuf)[0].winid)
+  old = ComparisonState()
+  Reject('DiffviewLineHistory')
+  assert_equal(old, ComparisonState(), 'dirty/mismatched ordinary source rejects without reloading')
+  assert_equal(bytes, getbufline(userbuf, 1, '$'))
+  assert_true(getbufvar(userbuf, '&modified'))
+  DiffviewClose
+  execute 'cd ' .. fnameescape(test_tmp .. '/reading repo')
+  DiffviewOpen
+  Select('Staged', 'move.c')
+  win_gotoid(Role('right').winid)
+  old = ComparisonState()
+  Reject('DiffviewFileHistory')
+  assert_equal(old, ComparisonState(), 'uncommitted-only rename cannot invent a captured-HEAD spelling')
+  DiffviewClose
+enddef
+
+def MergeBase()
+  execute 'cd ' .. fnameescape(test_tmp .. '/history review')
+  var repo = getcwd()
+  var root = Ref('history-root')
+  var tip = Ref('history-tip')
+  DiffviewOpen merge-target main -- src
+  var direct = EntryKeys()
+  execute 'DiffviewOpen --merge-base merge-target main -- src'
+  assert_notequal(direct, EntryKeys(), 'explicit base differs from target-tip direct endpoint comparison')
+  assert_match('\cmerge-base', PaneOption('left', 'statusline'))
+  assert_true(stridx(PaneOption('left', 'statusline'), root[0 : 6]) >= 0)
+  assert_true(stridx(PaneOption('right', 'statusline'), tip[0 : 6]) >= 0)
+  var expected = ReadingView()
+  var files = [repo .. '/.git/refs/heads/main', repo .. '/.git/refs/heads/merge-target']
+  var original = mapnew(files, (_, path) => readfile(path, 'b'))
+  try
+    for path in files
+      writefile([root], path)
+    endfor
+    execute 'cd ' .. fnameescape(test_tmp .. '/nonrepo')
+    HistoryFixedRefresh(expected)
+  finally
+    for i in range(len(files))
+      writefile(original[i], files[i], 'b')
+    endfor
+  endtry
+  execute 'cd ' .. fnameescape(repo)
+  execute 'DiffviewOpen --merge-base ' .. root .. ' ' .. root
+  NoChanges()
+  execute 'DiffviewOpen --merge-base ' .. root .. ' main -- src'
+  assert_match('\cmerge-base', PaneOption('left', 'statusline'))
+  execute 'DiffviewBranch --merge-base merge-target -- src'
+  assert_match('\cmerge-base', PaneOption('left', 'statusline'))
+  assert_true(stridx(PaneOption('left', 'statusline'), root[0 : 6]) >= 0)
+  expected = ReadingView()
+  HistoryFixedRefresh(expected)
+  $FZF_DEFAULT_OPTS = '--filter=merge-target'
+  execute 'DiffviewBranch --merge-base -- src'
+  WaitPicker()
+  assert_equal(expected.bodies, ReadingView().bodies)
+  assert_match('\cmerge-base', PaneOption('left', 'statusline'))
+  var old = ComparisonState()
+  for command in ['DiffviewOpen --merge-base main', 'DiffviewOpen --merge-base main main extra',
+      'DiffviewOpen --merge-base --merge-base main main', 'DiffviewBranch --merge-base --merge-base',
+      'DiffviewBranch --merge-base absent', 'DiffviewOpen --unknown main main']
+    Reject(command)
+    assert_equal(old, ComparisonState())
+  endfor
+  execute 'cd ' .. fnameescape(test_tmp .. '/history-bases')
+  for command in ['DiffviewOpen --merge-base cross-left cross-right', 'DiffviewOpen --merge-base main unrelated']
+    Reject(command)
+    assert_equal(old, ComparisonState(), 'zero or multiple best bases never choose an arbitrary base')
+  endfor
+  execute 'cd ' .. fnameescape(test_tmp .. '/history-shallow')
+  Reject('DiffviewOpen --merge-base HEAD ' .. Ref('history-root'))
+  assert_equal(old, ComparisonState(), 'missing shallow ancestry cannot fetch or invent a base')
+  DiffviewClose
+enddef
+
+def HistoryApi()
+  execute 'cd ' .. fnameescape(test_tmp .. '/history review')
+  var repo = getcwd()
+  execute 'DiffviewCommit ' .. Ref('history-merge')
+  Select('', 'src/new name.py')
+  win_gotoid(Role('right').winid)
+  execute HistoryCommand('File')
+  assert_equal(NativeHistoryOids('history-file-merge'), HistoryRowsOids(), 'source matches actual first-parent follow CID oracle')
+  assert_match('\cfirst.parent', g:diffview_test_picker_spec.options)
+  assert_match('\cfollow', g:diffview_test_picker_spec.options, 'file-history header states native rename following')
+  assert_false(!empty(filter(copy(g:diffview_test_picker_spec.source), (_, row) => stridx(row, 'HIST_SIDE') >= 0)),
+    'side-only graph is outside the mainline file trail')
+  var row = PickerRow('HIST_EDIT')
+  var state = ComparisonState()
+  call(g:diffview_test_picker_spec.exit, [1])
+  PickerOutput([])
+  assert_equal(state, ComparisonState())
+  for invalid in [0, row, [1], ['not a history source'], [row, row], [row .. ' tamper'], ['query', row]]
+    PickerOutput(invalid, true)
+    assert_equal(state, ComparisonState(), 'history exact-source/type/single-row validation')
+  endfor
+  var head_path = repo .. '/.git/HEAD'
+  var before = readfile(head_path, 'b')
+  try
+    writefile([Ref('history-root')], head_path)
+    execute 'cd ' .. fnameescape(test_tmp .. '/picker-elsewhere')
+    var cwd = getcwd()
+    PickerOutput([row])
+    Pair(['alpha', 'keep', 'old', 'omega'], ['alpha', 'keep', 'edited', 'omega'])
+    assert_equal('src/old.py', getbufvar(Role('right').bufnr, 'diffview_path'))
+    assert_equal(resolve(repo), resolve(getbufvar(Role('panel').bufnr, 'NERDTree').root.path.str()))
+    assert_equal(cwd, getcwd())
+    HistoryFixedRefresh(ReadingView())
+  finally
+    writefile(before, head_path, 'b')
+  endtry
+  execute 'cd ' .. fnameescape(repo)
+  execute 'DiffviewCommit ' .. Ref('history-move')
+  Select('', 'src/new name.py')
+  win_gotoid(Role('right').winid)
+  execute '1,5DiffviewLineHistory'
+  assert_equal(NativeHistoryOids('history-line-1,5'), HistoryRowsOids(), 'numeric range traces native Git, not blame fallback')
+  row = PickerRow('HIST_EDIT')
+  call(g:diffview_test_picker_spec.exit, [0])
+  cursor(1, 1)
+  execute 'cd ' .. fnameescape(test_tmp .. '/picker-elsewhere')
+  state = ComparisonState()
+  var oid = Ref('history-edit')
+  var object = repo .. '/.git/objects/' .. oid[0 : 1] .. '/' .. oid[2 : ]
+  try
+    assert_equal(0, rename(object, test_tmp .. '/history-object.saved'))
+    PickerOutput([row], true)
+    assert_equal(state, ComparisonState())
+  finally
+    assert_equal(0, rename(test_tmp .. '/history-object.saved', object))
+  endtry
+  augroup DiffviewHistoryRenderFault
+    autocmd FileType nerdtree throw 'fixture history selected renderer failure'
+  augroup END
+  try
+    state = ComparisonState()
+    PickerOutput([row], true)
+    assert_equal(state, ComparisonState())
+  finally
+    augroup DiffviewHistoryRenderFault
+      autocmd!
+    augroup END
+  endtry
+  PickerOutput([row])
+  Pair(['alpha', 'keep', 'old', 'omega'], ['alpha', 'keep', 'edited', 'omega'])
+  assert_equal(resolve(repo), resolve(getbufvar(Role('panel').bufnr, 'NERDTree').root.path.str()),
+    'line acceptance remains bound to launch path/range despite later cursor and cwd')
+  execute 'cd ' .. fnameescape(repo)
+  execute 'DiffviewOpen ' .. Ref('history-edit') .. ':src ' .. Ref('history-rename') .. ':src'
+  Select('', 'new name.py')
+  win_gotoid(Role('left').winid)
+  execute HistoryCommand('File')
+  assert_equal([Ref('history-edit'), Ref('history-root')], HistoryRowsOids(),
+    'left subtree context uses captured owning commit and oldpath')
+  call(g:diffview_test_picker_spec.exit, [130])
+  win_gotoid(Role('right').winid)
+  execute HistoryCommand('File')
+  assert_equal([Ref('history-rename'), Ref('history-edit'), Ref('history-root')], HistoryRowsOids())
+  call(g:diffview_test_picker_spec.exit, [130])
+  TreeCursor(Node('', 'new name.py'))
+  execute HistoryCommand('File')
+  assert_equal([Ref('history-rename'), Ref('history-edit'), Ref('history-root')], HistoryRowsOids(),
+    'real file node uses destination/right endpoint provenance')
+  call(g:diffview_test_picker_spec.exit, [130])
+  var raw_paths = ['space 中文.txt', 'colon:name.txt', 'C:' .. nr2char(92) .. 'literal.txt',
+    ':leading.txt', '-leading.txt', "line\nname.txt", "tab\tname.txt", 'literal\n.txt',
+    ':(glob)**', 'semi;$(touch HISTORY_INJECTED)|quote']
+  for i in range(len(raw_paths))
+    tabnew
+    execute 'edit ' .. fnameescape(repo .. '/' .. raw_paths[i])
+    execute HistoryCommand('Line', Ref('history-raw'))
+    assert_equal(NativeHistoryOids('history-line-raw-' .. (i + 1)), HistoryRowsOids(),
+      'numeric -L must associate the exact raw path: ' .. string(raw_paths[i]))
+    call(g:diffview_test_picker_spec.exit, [130])
+  endfor
+  assert_false(filereadable('HISTORY_INJECTED'))
+  win_gotoid(Role('panel').winid)
+  PreviewBoundary()
+  DiffviewClose
+enddef
+
+def PreviewContexts(): list<string>
+  var contexts = glob($TMPDIR .. '/**/source.json', false, true)
+  if !exists('g:diffview_test_context_directories')
+    g:diffview_test_context_directories = []
+  endif
+  for context in contexts
+    var directory = fnamemodify(context, ':h')
+    if index(g:diffview_test_context_directories, directory) < 0
+      add(g:diffview_test_context_directories, directory)
+    endif
+  endfor
+  return contexts
+enddef
+
+def PreviewCommand(): string
+  var options = g:diffview_test_picker_spec.options
+  assert_equal(v:t_string, type(options), 'actual core wrap returns its shell-escaped option string')
+  var script = 'set -- ' .. options .. '; for option do case "$option" in --preview=*) printf "%s\n" "${option#--preview=}";; esac; done'
+  var commands = systemlist('/bin/sh -c ' .. shellescape(script))
+  assert_equal(1, len(commands), 'one preview command, separate from acceptance callback')
+  return commands[0]
+enddef
+
+def PreviewOutput(token: number): list<string>
+  var command = substitute(PreviewCommand(), '{n}', string(token), 'g')
+  var lines = systemlist(command)
+  assert_false(empty(lines), 'preview cannot succeed as blank output')
+  for line in lines
+    assert_true(strlen(line) <= 4096, 'displayed byte limit includes truncation marker')
+    assert_false(line =~ '[\x01-\x08\x0b-\x1f\x7f]', 'preview escapes terminal control/OSC bytes')
+    assert_equal(line, iconv(line, 'utf-8', 'utf-8'), 'no broken UTF-8 character boundary')
+  endfor
+  assert_true(len(lines) <= 2000, 'visible line ceiling includes truncation marker')
+  return lines
+enddef
+
+def PreviewIndex(query: string): number
+  var row = PickerRow(query)
+  return index(g:diffview_test_picker_spec.source, row)
+enddef
+
+def WaitPreview(picker: number, oid: string): list<string>
+  var started = reltime()
+  var stable = 0
+  var screen: list<string> = []
+  while stable < 2 && reltimefloat(reltime(started)) < 8
+    term_wait(picker, 30)
+    screen = mapnew(range(1, term_getsize(picker)[0]), (_, row) => term_getline(picker, row))
+    # Full identity spans wrapped preview lines; picker rows contain only abbreviated IDs.
+    var size = term_getsize(picker)
+    var preview = mapnew(range(1, size[0]), (_, row) =>
+      join(mapnew(term_scrape(picker, row)[size[1] / 2 : ], (_, cell) => get(cell, 'chars', '')), ''))
+    var compact = substitute(join(preview, ''), '\s\|│', '', 'g')
+    stable = stridx(compact, 'commit' .. oid) >= 0 ? stable + 1 : 0
+  endwhile
+  assert_true(stable >= 2, 'actual worker preview became visible with the full focused identity: ' .. oid)
+  return screen
+enddef
+
+def WaitPreviewQuiet()
+  var started = reltime()
+  var quiet = 0
+  while quiet < 3 && reltimefloat(reltime(started)) < 5
+    var ui = getbufinfo()->filter((_, b) => getbufvar(b.bufnr, '&filetype') == 'fzf')
+    var jobs = job_info()->filter((_, job) => job isnot g:diffview_test_preview_foreign
+      && (job_status(job) == 'run' || index(['open', 'buffered'], ch_status(job_getchannel(job))) >= 0))
+    quiet = empty(ui) && empty(jobs) && empty(PreviewContexts()) ? quiet + 1 : 0
+    sleep 20m
+  endwhile
+  assert_true(quiet >= 3, 'owned picker/preview jobs and contexts become quiet while the foreign job stays alive')
+  assert_equal([], PreviewContexts(), 'only this picker private context must disappear after workers finish')
+  for directory in get(g:, 'diffview_test_context_directories', [])
+    assert_false(isdirectory(directory), 'owned context directory and its ancillary files are removed')
+  endfor
+  if filereadable($DIFFVIEW_TEST_PREVIEW_PROCESS_LOG)
+    var running = systemlist('ps -axo pid=,ppid=,pgid=,state=,command=')
+    for record in readfile($DIFFVIEW_TEST_PREVIEW_PROCESS_LOG)
+      var pid = get(split(record), 0, '')
+      assert_equal([], filter(copy(running), (_, line) => get(split(line), 0, '') == pid
+        && get(split(line), 3, '') !~ '^Z'), 'observed owned Git process cannot survive picker cleanup')
+      var group = get(split(record), 2, '')
+      assert_equal([], filter(copy(running), (_, line) => get(split(line), 2, '') == group
+        && get(split(line), 3, '') !~ '^Z'), 'all native/Git stages in an observed owned preview group stop')
+    endfor
+  endif
+enddef
+
+def HistoryLivePreviewFault()
+  var started = reltime()
+  g:diffview_test_live_preview_processes = []
+  while empty(g:diffview_test_live_preview_processes) && reltimefloat(reltime(started)) < 5
+    sleep 20m
+    var rows = systemlist('ps -axo pid=,ppid=,pgid=,state=,command=')
+    g:diffview_test_live_preview_processes = filter(rows, (_, line) =>
+      stridx(line, '--output=' .. $DIFFVIEW_TEST_PREVIEW_FIFO) >= 0 && stridx(line, ' show ') >= 0
+      && get(split(line), 3, '') !~ '^Z')
+  endwhile
+  assert_false(empty(g:diffview_test_live_preview_processes), 'fault follows a provably live real Git preview process')
+  throw 'fixture after actual live preview Git'
+enddef
+
+def PreviewBoundary()
+  var state = ComparisonState()
+  DiffviewCommit
+  var command = PreviewCommand()
+  assert_true(stridx(command, '{n}') >= 0, 'numeric focus token is separate from a raw source row')
+  var contexts = PreviewContexts()
+  assert_equal(1, len(contexts))
+  assert_equal('rw-------', getfperm(contexts[0]))
+  assert_equal('rwx------', getfperm(fnamemodify(contexts[0], ':h')))
+  var context_bytes = readblob(contexts[0])
+  var root = PreviewOutput(PreviewIndex('HIST_ROOT'))
+  assert_match(Ref('history-root'), join(root, "\n"))
+  assert_match('+alpha', join(root, "\n"), 'root preview uses EMPTY first-parent patch')
+  try
+    $DIFFVIEW_TEST_PREVIEW_BAD_OID = Ref('history-root')
+    var failed = PreviewOutput(PreviewIndex('HIST_ROOT'))
+    assert_match('\[diffview\]', join(failed, "\n"),
+      'nonzero real command status overrides a valid commit header and a forged earlier status0 line')
+  finally
+    $DIFFVIEW_TEST_PREVIEW_BAD_OID = ''
+  endtry
+  var merge = PreviewOutput(PreviewIndex('HIST_MERGE'))
+  assert_match('+side branch only', join(merge, "\n"), 'merge preview is first-parent, not combined diff')
+  assert_false(join(merge, "\n") =~ '^diff --cc')
+  var limit = PreviewOutput(PreviewIndex('HIST_LIMIT'))
+  assert_match('\ctruncat\|limit', join(limit, "\n"))
+  assert_true(len(limit) > 100, 'ceiling fixture actually produces a nontrivial patch')
+  assert_false(filereadable('PREVIEW_INJECTED') || filereadable('HISTORY_INJECTED'))
+  assert_false(filereadable(test_tmp .. '/history-command-executed'), 'no extdiff, textconv or pager hook executes')
+  assert_equal(context_bytes, readblob(contexts[0]), 'focused requests never mutate the immutable source context')
+  var invalid = systemlist(substitute(command, '{n}', '999999', 'g'))
+  assert_match('\[diffview\]', join(invalid, "\n"), 'invalid token is a local preview error')
+  assert_equal(state, ComparisonState(), 'preview and local errors cannot accept or replace a view')
+  call(g:diffview_test_picker_spec.exit, [130])
+  assert_equal([], PreviewContexts())
+  execute 'DiffviewCommit -- src'
+  var projected = PreviewOutput(PreviewIndex('HIST_ROOT'))
+  assert_match('+alpha', join(projected, "\n"))
+  assert_false(join(projected, "\n") =~ 'root untouched', 'prefix restricts summary and patch')
+  call(g:diffview_test_picker_spec.exit, [130])
+  execute HistoryCommand('File', 'review-merge', 'src/new name.py')
+  var historical = PreviewOutput(PreviewIndex('HIST_EDIT'))
+  assert_match('src/old.py', join(historical, "\n"), 'history preview uses the historical raw path')
+  call(g:diffview_test_picker_spec.exit, [130])
+  execute HistoryCommand('File', 'review-merge', 'src/new name.py')
+  var renamed = PreviewOutput(PreviewIndex('HIST_RENAME'))
+  assert_match('rename from src/old.py', join(renamed, "\n"))
+  assert_match('rename to src/new name.py', join(renamed, "\n"))
+  assert_false(join(renamed, "\n") =~ 'UNRELATED HISTORY CHILD\|src/old.py/child.txt',
+    'history preview follows the rename identity rather than treating oldpath as a directory prefix')
+  call(g:diffview_test_picker_spec.exit, [130])
+  execute 'DiffviewCommit -- NO_PATH_MATCHES'
+  var no_patch = PreviewOutput(PreviewIndex('HIST_ROOT'))
+  assert_match('commit ' .. Ref('history-root'), join(no_patch, "\n"))
+  assert_match('HIST_ROOT', join(no_patch, "\n"), 'ordinary commit message is independent of its patch projection')
+  assert_false(join(no_patch, "\n") =~ 'diff --git\|\[diffview\].*\cfailed')
+  call(g:diffview_test_picker_spec.exit, [130])
+  var oversized = repeat('x', 9000)
+  execute 'DiffviewCommit -- ' .. oversized
+  var oversized_output = PreviewOutput(PreviewIndex('HIST_ROOT'))
+  assert_match('\[diffview\]', join(oversized_output, "\n"), 'over-budget preview is a local error')
+  var selected = PickerRow('HIST_ROOT')
+  call(g:diffview_test_picker_spec.exit, [0])
+  PickerOutput([selected])
+  assert_match('No matching changes', join(getbufline(Role('panel').bufnr, 1, '$'), "\n"),
+    'preview argument limit does not disable normal accepted comparison')
+  execute 'DiffviewCommit -- ' .. join(mapnew(range(260), (_, index) => 'never-matches-' .. index), ' ')
+  var too_many = PreviewOutput(PreviewIndex('HIST_ROOT'))
+  assert_match('\[diffview\]', join(too_many, "\n"), 'argument-count limit does not split one request into many Git queries')
+  call(g:diffview_test_picker_spec.exit, [130])
+  var saved_path = $PATH
+  var isolated = test_tmp .. '/no-xargs-bin'
+  mkdir(isolated, 'p')
+  for executable in ['git', 'fzf', 'vim']
+    var resolved = exepath(executable)
+    system('ln -s ' .. shellescape(resolved) .. ' ' .. shellescape(isolated .. '/' .. executable))
+  endfor
+  try
+    $PATH = isolated
+    assert_false(executable('xargs'), 'missing-preview-transport fixture leaves core fzf and Git available')
+    execute 'DiffviewCommit -- src'
+    var unavailable = systemlist(substitute(PreviewCommand(), '{n}', string(PreviewIndex('HIST_ROOT')), 'g'))
+    assert_match('\[diffview\]', join(unavailable, "\n"))
+    assert_match('\cxargs', join(unavailable, "\n"), 'missing transport is a local preview error')
+    var root_row = PickerRow('HIST_ROOT')
+    call(g:diffview_test_picker_spec.exit, [0])
+    PickerOutput([root_row])
+    Pair([''], ['alpha', 'keep', 'old', 'omega'])
+  finally
+    $PATH = saved_path
+  endtry
+enddef
+
+def HistoryPreview()
+  execute 'cd ' .. fnameescape(test_tmp .. '/history review')
+  var repo = getcwd()
+  execute 'edit ' .. fnameescape('src/new name.py')
+  setline(1, ['UNSAVED preview caller'])
+  var caller = bufnr()
+  var origin = win_getid()
+  set nohidden autowrite autowriteall
+  setlocal bufhidden=wipe
+  SeedRegisters()
+  var registers = RegisterState()
+  DiffviewOpen
+  Select('Unstaged', 'other.txt')
+  var state = ComparisonState()
+  var foreign = job_start(['/bin/sleep', '45'], {in_io: 'null', out_io: 'null', err_io: 'null'})
+  g:diffview_test_preview_foreign = foreign
+  var observations: list<any> = []
+  try
+    for layout in ['default', 'enew']
+      if layout == 'enew'
+        g:fzf_layout = {window: 'enew'}
+      else
+        unlet! g:fzf_layout
+      endif
+      $FZF_DEFAULT_OPTS = ''
+      execute 'DiffviewCommit -- src'
+      var terminals = getbufinfo()->filter((_, b) => getbufvar(b.bufnr, '&filetype') == 'fzf')
+      assert_equal(1, len(terminals))
+      var picker = terminals[0].bufnr
+      term_sendkeys(picker, 'HIST_ROOT')
+      var screen = WaitPreview(picker, Ref('history-root'))
+      assert_equal(1, len(PreviewContexts()), 'real picker owns one live context')
+      var calls = readfile($DIFFVIEW_TEST_GIT_LOG, 'b')
+      assert_false(empty(filter(calls, (_, row) => GitSubcommand(row) == 'show')),
+        'a real worker executed protected Git preview, not only a visible fake header')
+      for item in [['HIST_EDIT', 'history-edit'], ['HIST_MERGE', 'history-merge'], ['HIST_ROOT', 'history-root']]
+        term_sendkeys(picker, "\<C-U>" .. item[0])
+        WaitPreview(picker, Ref(item[1]))
+      endfor
+      term_sendkeys(picker, nr2char(31))
+      var hidden = 0
+      var hide_started = reltime()
+      while hidden < 2 && reltimefloat(reltime(hide_started)) < 3
+        term_wait(picker, 20)
+        var hidden_screen = mapnew(range(1, term_getsize(picker)[0]), (_, row) => term_getline(picker, row))
+        hidden = join(hidden_screen, "\n") !~ 'commit ' ? hidden + 1 : 0
+      endwhile
+      assert_true(hidden >= 2, 'real toggle hides the preview, not just an unobserved key event')
+      term_sendkeys(picker, nr2char(31))
+      WaitPreview(picker, Ref('history-root'))
+      term_sendkeys(picker, "\<C-C>")
+      WaitPreviewQuiet()
+      assert_equal('run', job_status(foreign), 'cancel stops owned preview jobs, not unrelated user jobs')
+      assert_equal(state, ComparisonState(), layout .. ' preview cancel preserves full old state')
+      execute 'DiffviewCommit -- src'
+      picker = getbufinfo()->filter((_, b) => getbufvar(b.bufnr, '&filetype') == 'fzf')[0].bufnr
+      term_sendkeys(picker, 'HIST_EDIT')
+      WaitPreview(picker, Ref('history-edit'))
+      term_sendkeys(picker, "\<CR>")
+      WaitPreviewQuiet()
+      Pair(['alpha', 'keep', 'old', 'omega'], ['alpha', 'keep', 'edited', 'omega'])
+      assert_equal('run', job_status(foreign))
+      state = ComparisonState()
+      win_gotoid(origin)
+      var fifo = test_tmp .. '/preview-blocked-output'
+      system('mkfifo ' .. shellescape(fifo))
+      $DIFFVIEW_TEST_PREVIEW_FIFO = fifo
+      augroup DiffviewHistoryLivePreviewFault
+        autocmd FileType fzf HistoryLivePreviewFault()
+      augroup END
+      try
+        state = ComparisonState()
+        Reject('DiffviewCommit')
+        WaitPreviewQuiet()
+        assert_false(empty(g:diffview_test_live_preview_processes))
+        assert_equal(state, ComparisonState(), 'live-preview fault preserves all fourteen fields including the installed trap')
+        assert_match('fixture after actual live preview Git', execute('messages') .. v:errmsg)
+        assert_notmatch('E948\|E994', execute('messages') .. v:errmsg)
+        assert_equal('run', job_status(foreign), 'fault cleanup cannot kill the unrelated user job')
+      finally
+        augroup DiffviewHistoryLivePreviewFault
+          autocmd!
+        augroup END
+        $DIFFVIEW_TEST_PREVIEW_FIFO = ''
+        delete(fifo)
+      endtry
+      assert_true(getbufvar(caller, '&modified'))
+      assert_equal(['UNSAVED preview caller'], getbufline(caller, 1, '$'))
+      assert_equal(['recreated unrelated'], readfile(repo .. '/src/new name.py'))
+      state = ComparisonState()
+      add(observations, {layout: layout, real_worker_seen: true, context_removed_after_cancel_accept: true,
+        actual_live_Git_fault_seen: true, foreign_job_running: true})
+    endfor
+  finally
+    if job_status(foreign) == 'run'
+      job_stop(foreign)
+    endif
+  endtry
+  assert_equal(registers, RegisterState())
+  assert_equal([], PreviewContexts())
+  writefile([json_encode({scope: 'real core/binary headless preview plus separately captured-run worker output',
+    observations: observations, core_binary: fzf#exec('0.0.0', 1)})], test_tmp .. '/history-preview.facts.json')
+  DiffviewClose
+enddef
+
 try
   assert_true(has('vim9script'))
   assert_true(has('diff'))
@@ -3255,9 +3916,9 @@ try
     runtime plugin/NERD_tree.vim
     assert_equal(2, exists(':NERDTree'), 'real NERDTree commands are loaded')
   endif
-  if (case_name =~ '^picker_' || case_name == 'reading_filter' || case_name =~ '^branch_')
+  if (case_name =~ '^picker_' || case_name == 'reading_filter' || case_name =~ '^branch_' || case_name =~ '^history_')
       && index(['picker_missing', 'branch_direct'], case_name) < 0
-    if case_name == 'picker_api' || case_name == 'branch_api'
+    if case_name == 'picker_api' || case_name == 'branch_api' || case_name == 'history_api'
       &runtimepath = $FZF_RUNTIME .. ',' .. &runtimepath
       runtime plugin/fzf.vim
       &runtimepath = harness_root .. '/tests/picker-api,' .. &runtimepath
@@ -3271,7 +3932,7 @@ try
       assert_true(has('terminal'), 'filtered core integration uses a real Vim terminal job')
     endif
   endif
-  if case_name =~ '^picker_' || case_name == 'reading_filter' || case_name =~ '^branch_'
+  if case_name =~ '^picker_' || case_name == 'reading_filter' || case_name =~ '^branch_' || case_name =~ '^history_'
     g:fzf_layout = {down: 8}
   endif
   runtime plugin/main.vim
@@ -3367,6 +4028,16 @@ try
     BranchApi()
   elseif case_name == 'branch_lifecycle'
     BranchLifecycle()
+  elseif case_name == 'history_file'
+    FileHistory()
+  elseif case_name == 'history_line'
+    LineHistory()
+  elseif case_name == 'history_mergebase'
+    MergeBase()
+  elseif case_name == 'history_api'
+    HistoryApi()
+  elseif case_name == 'history_preview'
+    HistoryPreview()
   else
     throw 'Unknown test case: ' .. case_name
   endif
