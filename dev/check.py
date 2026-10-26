@@ -935,6 +935,14 @@ DiffviewClose
         git(branch_repo, "update-ref", "refs/remotes/origin/pick-target", target_oid)
         git(branch_repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/pick-target")
         git(branch_repo, "tag", "tag-only", target_oid)
+        tree_oid = git(branch_repo, "rev-parse", "HEAD^{tree}").decode().strip()
+        unrelated = git(branch_repo, "commit-tree", tree_oid, "-m", "unrelated").decode().strip()
+        a_tip = git(branch_repo, "commit-tree", tree_oid, "-p", base_oid, "-m", "A").decode().strip()
+        b_tip = git(branch_repo, "commit-tree", tree_oid, "-p", base_oid, "-m", "B").decode().strip()
+        cross_a = git(branch_repo, "commit-tree", tree_oid, "-p", a_tip, "-p", b_tip, "-m", "cross A").decode().strip()
+        cross_b = git(branch_repo, "commit-tree", tree_oid, "-p", b_tip, "-p", a_tip, "-m", "cross B").decode().strip()
+        for label, oid in [("unrelated", unrelated), ("cross-a", cross_a), ("cross-b", cross_b)]:
+            git(branch_repo, "tag", label, oid)
         special_branch = "literal'$();|branch"
         git(branch_repo, "branch", special_branch, target_oid)
         (branch_repo / "file").write_text("INDEX\n")
@@ -987,13 +995,28 @@ call assert_match('LOCAL origin/pick-target', getbufvar(BranchRole('left'), 'dif
 DiffviewBranch refs/remotes/origin/pick-target -- src
 call BranchPair('TARGET', 'HEAD')
 call assert_match('REMOTE origin/pick-target', getbufvar(BranchRole('left'), 'diffview_source'))
+DiffviewOpen --merge-base pick-target main -- src
+call BranchPair('BASE', 'HEAD')
+call assert_match('merge-base(pick-target, main).*' . base_oid[0:6], getbufvar(BranchRole('left'), 'diffview_source'))
+let saved_base_target = readfile('.git/refs/heads/pick-target', 'b')
+try
+  call writefile([head_oid], '.git/refs/heads/pick-target')
+  DiffviewRefresh
+  call BranchPair('BASE', 'HEAD')
+finally
+  call writefile(saved_base_target, '.git/refs/heads/pick-target', 'b')
+endtry
+DiffviewBranch --merge-base pick-target -- src
+call BranchPair('BASE', 'HEAD')
+call assert_match('merge-base(LOCAL pick-target, HEAD main)', getbufvar(BranchRole('left'), 'diffview_source'))
 execute 'DiffviewBranch ' . special_branch . ' -- src'
 call BranchPair('TARGET', 'HEAD')
 call assert_false(filereadable('INJECTED'))
 let buffers = map(['panel', 'left', 'right'], {_, role -> BranchRole(role)})
 for command in ['DiffviewBranch missing', 'DiffviewBranch tag-only', 'DiffviewBranch HEAD~1',
     \ 'DiffviewBranch --help', 'DiffviewBranch pick-target extra', 'DiffviewBranch main -- ../escape',
-    \ 'DiffviewBranch refs/remotes/origin/HEAD']
+    \ 'DiffviewBranch refs/remotes/origin/HEAD', 'DiffviewOpen --merge-base unrelated main',
+    \ 'DiffviewOpen --merge-base cross-a cross-b', 'DiffviewOpen --merge-base --merge-base main main']
   execute command
   call assert_equal(buffers, map(['panel', 'left', 'right'], {_, role -> BranchRole(role)}))
   call BranchPair('TARGET', 'HEAD')

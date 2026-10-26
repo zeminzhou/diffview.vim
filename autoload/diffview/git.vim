@@ -167,10 +167,11 @@ export def Local(root: string): dict<any>
             oldmode: '000000', newmode: '100644', oldoid: '', newoid: '', added: -1, deleted: -1})
     endfor
     return {root: root, mode: 'local', args: [], entries: entries,
+        leftCommit: head, rightCommit: head,
         leftPrefix: '', rightPrefix: '', head: head == '' ? 'EMPTY' : 'HEAD ' .. head[0 : 6]}
 enddef
 
-def Resolve(root: string, revision: string, kind: string): string
+export def Resolve(root: string, revision: string, kind: string): string
     if revision == '' || revision[0] == '-'
         throw '[diffview] Invalid revision: ' .. Display(revision)
     endif
@@ -229,7 +230,7 @@ enddef
 def TreeSource(root: string, revision: string): dict<any>
     try
         var commit = Resolve(root, revision, 'commit')
-        return {oid: Resolve(root, commit, 'tree'), prefix: ''}
+        return {oid: Resolve(root, commit, 'tree'), prefix: '', commit: commit}
     catch
     endtry
     var tree = Resolve(root, revision, 'tree')
@@ -240,14 +241,22 @@ def TreeSource(root: string, revision: string): dict<any>
             var normalized = Prefixes([strpart(revision, colon + 1)])
             var prefix = empty(normalized) ? '' : normalized[0]
             if Resolve(root, commit .. (prefix == '' ? '' : ':' .. prefix), 'tree') == tree
-                return {oid: tree, prefix: prefix}
+                return {oid: tree, prefix: prefix, commit: commit}
             endif
         catch
         endtry
         colon = stridx(revision, ':', colon + 1)
     endwhile
     # Tree-only expressions remain browsable without guessing a disk mapping.
-    return {oid: tree, prefix: v:null}
+    return {oid: tree, prefix: v:null, commit: ''}
+enddef
+
+export def MergeBase(root: string, left: string, right: string): string
+    var bases = filter(Run(root, ['merge-base', '--all', left, right], true), (_, line) => line != '')
+    if len(bases) != 1 || bases[0] !~ '^\x\+$' || index([40, 64], strlen(bases[0])) < 0
+        throw '[diffview] Review requires exactly one merge base; found ' .. len(bases) .. '.'
+    endif
+    return Resolve(root, bases[0], 'commit')
 enddef
 
 export def Prefixes(paths: list<string>): list<string>
@@ -302,6 +311,7 @@ export def Comparison(root: string, args: list<string>, commit: bool): dict<any>
         var entries = parent == '' ? DiffEntries(root, [oid], 'Commit', true)
             : DiffEntries(root, [parent, oid], 'Commit')
         return {root: root, mode: 'commit', args: copy(args), entries: entries,
+            leftCommit: parent, rightCommit: oid,
             leftPrefix: '', rightPrefix: '',
             leftSource: parent == '' ? 'EMPTY' : revision .. '^1 ' .. parent[0 : 6],
             rightSource: revision .. ' ' .. oid[0 : 6]}
@@ -309,6 +319,7 @@ export def Comparison(root: string, args: list<string>, commit: bool): dict<any>
     var left = TreeSource(root, args[0])
     var right = TreeSource(root, args[1])
     return {root: root, mode: 'trees', args: copy(args),
+        leftCommit: left.commit, rightCommit: right.commit,
         entries: DiffEntries(root, [left.oid, right.oid], 'Trees'), leftPrefix: left.prefix, rightPrefix: right.prefix,
         leftSource: args[0] .. ' ' .. left.oid[0 : 6], rightSource: args[1] .. ' ' .. right.oid[0 : 6]}
 enddef

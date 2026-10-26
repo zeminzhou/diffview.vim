@@ -382,16 +382,34 @@ export def GotoFile()
     endtry
 enddef
 
-def Arguments(args: list<string>): dict<any>
+def Arguments(args: list<string>, allowBase = false): dict<any>
     var separator = index(args, '--')
-    return {revisions: separator < 0 ? copy(args) : separator == 0 ? [] : args[0 : separator - 1],
+    var revisions = separator < 0 ? copy(args) : separator == 0 ? [] : args[0 : separator - 1]
+    var base = allowBase && !empty(revisions) && revisions[0] == '--merge-base'
+    if base
+        remove(revisions, 0)
+    endif
+    if index(revisions, '--merge-base') >= 0
+        throw '[diffview] --merge-base must occur once before the endpoints.'
+    endif
+    return {revisions: revisions, mergeBase: base,
         paths: separator < 0 ? [] : git.Prefixes(args[separator + 1 :])}
 enddef
 
 export def OpenRequest(args: list<string>)
     try
-        var request = Arguments(args)
-        Open(request.revisions, false, '', request.paths)
+        var request = Arguments(args, true)
+        if request.mergeBase
+            if len(request.revisions) != 2
+                throw '[diffview] Usage: DiffviewOpen --merge-base A B [-- paths...]'
+            endif
+            var root = git.Root()
+            var left = git.Resolve(root, request.revisions[0], 'commit')
+            var right = git.Resolve(root, request.revisions[1], 'commit')
+            OpenBase(root, left, right, request.revisions[0], request.revisions[1], request.paths)
+        else
+            Open(request.revisions, false, '', request.paths)
+        endif
     catch
         Error(v:exception)
     endtry
@@ -469,8 +487,18 @@ export def Open(args: list<string>, commit = false, root = '', paths: list<strin
 enddef
 
 def OpenBranch(snapshot: dict<any>, target: dict<any>, paths: list<string>)
-    Open([target.oid, snapshot.head], false, snapshot.root, paths,
-        {left: target.label .. ' ' .. target.oid[0 : 6], right: snapshot.label .. ' ' .. snapshot.head[0 : 6]})
+    if get(snapshot, 'mergeBase', false)
+        OpenBase(snapshot.root, target.oid, snapshot.head, target.label, snapshot.label, paths)
+    else
+        Open([target.oid, snapshot.head], false, snapshot.root, paths,
+            {left: target.label .. ' ' .. target.oid[0 : 6], right: snapshot.label .. ' ' .. snapshot.head[0 : 6]})
+    endif
+enddef
+
+def OpenBase(root: string, left: string, right: string, leftLabel: string, rightLabel: string, paths: list<string>)
+    var base = git.MergeBase(root, left, right)
+    Open([base, right], false, root, paths, {left: 'merge-base(' .. leftLabel .. ', ' .. rightLabel .. ') ' .. base[0 : 6],
+        right: rightLabel .. ' ' .. right[0 : 6]})
 enddef
 
 def Selected(root: string, source: list<string>, origin: dict<any>, paths: list<string>, lines: any, snapshot: dict<any>)
@@ -557,7 +585,7 @@ def RollbackPicker(origin: dict<any>)
     endif
 enddef
 
-def Pick(commit: bool, paths: list<string>)
+def Pick(commit: bool, paths: list<string>, mergeBase = false)
     try
         tree.Check()
         if !exists('*fzf#run') || !exists('*fzf#wrap') || !exists('*fzf#exec') || !executable('fzf')
@@ -568,6 +596,9 @@ def Pick(commit: bool, paths: list<string>)
         fzf#exec('0.0.0', 1)
         var root = git.Root()
         var snapshot = commit ? {} : git.Branches(root)
+        if !commit
+            snapshot.mergeBase = mergeBase
+        endif
         var source: list<string> = commit ? git.Commits(root) : mapnew(snapshot.targets, (_, target) => target.row)
         if empty(source)
             throw '[diffview] No ' .. (commit ? 'commits' : 'branches') .. ' to select.'
@@ -642,12 +673,12 @@ enddef
 
 export def Branch(args: list<string>)
     try
-        var request = Arguments(args)
+        var request = Arguments(args, true)
         if len(request.revisions) > 1
             throw '[diffview] Usage: DiffviewBranch [branch] [-- paths...]'
         endif
         if empty(request.revisions)
-            Pick(false, request.paths)
+            Pick(false, request.paths, request.mergeBase)
             return
         endif
         tree.Check()
@@ -656,6 +687,7 @@ export def Branch(args: list<string>)
             throw '[diffview] Invalid branch name: ' .. git.Display(name)
         endif
         var snapshot = git.Branches(git.Root())
+        snapshot.mergeBase = request.mergeBase
         var refs = stridx(name, 'refs/') == 0 ? [name] : ['refs/heads/' .. name, 'refs/remotes/' .. name]
         for ref in refs
             for target in snapshot.targets
